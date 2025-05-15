@@ -1,0 +1,5 @@
+---
+float64 max_lat
+float64 min_lat
+float64 max_lon
+float64 min_lon

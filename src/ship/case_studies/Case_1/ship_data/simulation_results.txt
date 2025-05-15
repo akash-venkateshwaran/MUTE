@@ -1,0 +1,2 @@
+Arrival Time: 742.25 minutes
+ETA: 741.00 minutes

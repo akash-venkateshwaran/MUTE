@@ -1,0 +1,8 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="default">
+    <include>
+      <uri>file:///workspaces/MELO_workspace/src/visualisation/models/bathy.sdf</uri>
+    </include>
+  </world>
+</sdf>

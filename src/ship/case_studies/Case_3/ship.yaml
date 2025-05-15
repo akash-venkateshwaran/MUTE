@@ -1,0 +1,6 @@
+ship_info:
+  ship_type: 'Other'
+  ship_name: 'OKIANA'
+  max_v : 14.5 # knots
+  min_v : 8.0 # knots
+  ship_length: 697.18 # feet

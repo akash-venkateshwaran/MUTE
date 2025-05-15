@@ -1,0 +1,6 @@
+HelperPosition min_box_edge
+HelperPosition max_box_edge
+---
+float32[] latitudes
+float32[] longitudes
+int32[] polygon_starts

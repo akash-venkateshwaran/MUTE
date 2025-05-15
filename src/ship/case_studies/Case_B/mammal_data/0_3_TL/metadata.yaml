@@ -1,0 +1,26 @@
+rosbag2_bagfile_information:
+  version: 5
+  storage_identifier: sqlite3
+  duration:
+    nanoseconds: 22715774
+  starting_time:
+    nanoseconds_since_epoch: 1736313681939088545
+  message_count: 741
+  topics_with_message_count:
+    - topic_metadata:
+        name: /mammal_TL_msg
+        type: custom_interfaces/msg/SPL
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 741
+  compression_format: ""
+  compression_mode: ""
+  relative_file_paths:
+    - 0_3_TL_0.db3
+  files:
+    - path: 0_3_TL_0.db3
+      starting_time:
+        nanoseconds_since_epoch: 1736313681939088545
+      duration:
+        nanoseconds: 22715774
+      message_count: 741
