@@ -1,3 +1,6 @@
+*.pkl filter=lfs diff=lfs merge=lfs -text
+*.stl filter=lfs diff=lfs merge=lfs -text
+*.db3 filter=lfs diff=lfs merge=lfs -text
 src/noise_propagation_model/**/*.pkl filter=lfs diff=lfs merge=lfs -text
 src/visualisation/mesh/*.stl filter=lfs diff=lfs merge=lfs -text
 src/ship/**/*.db3 filter=lfs diff=lfs merge=lfs -text
