@@ -1,3 +1,18 @@
+"""ROS 2 script to manage marine‑mammal nodes for a case study.
+
+Features
+--------
+1. Interactively create a new case‑study directory (error if it already exists).
+2. Subscribe to /clock (simulation time) and /ETA (expected end‑time) – wait until both are
+   available, printing “waiting…” meanwhile.
+3. While the current simulation time is < ETA, offer a command‑line menu to either
+   ● Initialise a new mammal node (manual values or KDE sampling)
+   ● Terminate an existing mammal node (sets `end_clock` in its YAML file)
+4. YAML files live inside the new case folder, one per mammal, e.g. `m0_1_params.yaml`.
+
+
+"""
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 import matplotlib.pyplot as plt
@@ -13,10 +28,36 @@ import shutil
 from rclpy.parameter import Parameter
 import launch.logging
 
+from custom_interfaces.srv import BoundsService
 
-from mammals.launch_utils import plot_species_samples, validate_samples, get_bounds, export_samples_to_yaml
+
+from mammals.launch_utils import plot_species_samples, validate_samples, export_samples_to_yaml
 
 from pathlib import Path
+
+def get_bounds():
+    rclpy.init()
+    node = rclpy.create_node('bounds_service_client')
+    client = node.create_client(BoundsService, 'bounds_service')
+    while not client.wait_for_service(timeout_sec=1.0):
+        node.get_logger().info('BoundsService not available, waiting again...')
+    request = BoundsService.Request()
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future)
+    if future.result() is not None:
+        response = future.result()
+        node.get_logger().info(
+            f"Received bounds: max_lat={response.max_lat}, min_lat={response.min_lat}, "
+            f"max_lon={response.max_lon}, min_lon={response.min_lon}"
+        )
+        rclpy.shutdown()
+        return response
+    else:
+        node.get_logger().error('BoundsService call failed %r' % (future.exception(),))
+        rclpy.shutdown()
+        return None
+
+
 
 def find_src_dir(start_path: Path) -> Path:
     current = start_path.resolve()
@@ -30,7 +71,7 @@ def find_src_dir(start_path: Path) -> Path:
 src_dir = find_src_dir(Path(__file__))
 
 base_directory = str(src_dir / 'mammals')
-case_directory = 'case_studies/Case_C' 
+case_directory = 'case_studies/Case_B' 
 TL_model_path = str(src_dir / 'noise_propagation_model' /'noise_propagation_model' / 'models' / 'RBF' / 'model')
 
 

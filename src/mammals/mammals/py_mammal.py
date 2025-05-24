@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 from custom_interfaces.msg import State, HelperPosition, HeadingAngle, SPL
 from pyproj import Geod
-from mammals.launch_utils import get_bounds
+from mammals.launch_utils import find_src_dir
 from environment.py_polyshp import Polyshp
 import os
 from shapely.geometry import Point, Polygon, MultiPolygon
@@ -12,6 +12,7 @@ import rosbag2_py
 from threading import Thread
 import numpy as np
 
+from custom_interfaces.srv import BoundsService
 
 from noise_propagation_model.models.RBF.utils_rbf import RBFInterpolatorCustom
 from rosbag2_py import SequentialWriter
@@ -19,22 +20,34 @@ from rclpy.serialization import serialize_message
 import signal
 
 from pathlib import Path
-
-def find_src_dir(start_path: Path) -> Path:
-    """
-    Search upward from the start_path until a directory containing a 'src' folder is found.
-    Returns the path to that 'src' folder.
-    """
-    current = start_path.resolve()
-    while current != current.parent:  # stop at filesystem root
-        candidate = current / "src"
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-        current = current.parent
-    raise FileNotFoundError("Could not find a 'src' directory in any parent directories.")
+import yaml
 
 src_dir = find_src_dir(Path(__file__))
 base_directory = src_dir / "mammals"
+
+def get_bounds():
+    rclpy.init()
+    node = rclpy.create_node('bounds_service_client')
+    client = node.create_client(BoundsService, 'bounds_service')
+    while not client.wait_for_service(timeout_sec=1.0):
+        node.get_logger().info('BoundsService not available, waiting again...')
+    request = BoundsService.Request()
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future)
+    if future.result() is not None:
+        response = future.result()
+        node.get_logger().info(
+            f"Received bounds: max_lat={response.max_lat}, min_lat={response.min_lat}, "
+            f"max_lon={response.max_lon}, min_lon={response.min_lon}"
+        )
+        rclpy.shutdown()
+        return response
+    else:
+        node.get_logger().error('BoundsService call failed %r' % (future.exception(),))
+        rclpy.shutdown()
+        return None
+
+
 
 
 GEODESIC = Geod(ellps="WGS84")
@@ -51,16 +64,22 @@ class Mammal(Node):
         self.setup_logger()
         # Parameters
         self.declare_parameter('latitude', 49.2072409066087)
-        self.declare_parameter('longitude', -123.17497521916255)
-        self.declare_parameter('depth', 1000.0)
+        self.declare_parameter('longitude', -123.27497521916255)
+        self.declare_parameter('depth', 10.0)
         self.declare_parameter('heading', 20.0)
-        self.declare_parameter('speed', 2.0)
-        self.declare_parameter('topic', 'mammal_state')
+        self.declare_parameter('speed', 5.0)
+        self.declare_parameter('topic', 'm0_1_state')
         self.declare_parameter('bag_dir', '/workspaces/MUTE_v1/src/ship/case_studies/Case_1/mammal_data')
+        self.declare_parameter('case_dir', '/workspaces/MUTE_v1/src/mammals/case_studies')
         self.declare_parameter('TL_model_path', '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/RBF/model')
+
+
+
         self.shoreline_polygons = []  # List of shapely polygons
         self.verbose_logging = False
         self.bag_exported = False
+        self.yaml_written = False        # <-- guard so we write it once
+        self.yaml_path: Path | None = None
 
         latitude = self.get_parameter('latitude').get_parameter_value().double_value
         longitude = self.get_parameter('longitude').get_parameter_value().double_value
@@ -69,8 +88,9 @@ class Mammal(Node):
         speed = self.get_parameter('speed').get_parameter_value().double_value # m/s
         topic = self.get_parameter('topic').get_parameter_value().string_value
         self.bag_dir = self.get_parameter('bag_dir').get_parameter_value().string_value
-
+        self.case_dir = self.get_parameter('case_dir').get_parameter_value().string_value
         self.TL_model_path = self.get_parameter('TL_model_path').get_parameter_value().string_value
+        
         self.TL_model = RBFInterpolatorCustom.import_model(self.TL_model_path)
 
 
@@ -134,6 +154,63 @@ class Mammal(Node):
     def ship_state_callback(self, msg):
         self.ship_state = msg
 
+    def export_params_to_yaml(self):
+        """
+        Create <topic>_params.yaml inside self.case_dir the *first* time
+        simulation_time is updated.  The file is structured exactly as you
+        requested.
+        """
+        node_name = self.get_name()             # "mammal_node"
+        topic_name = self.publisher_.topic      # e.g. "m0_1_state"
+
+        content = {
+            node_name: {
+                "ros__parameters": {
+                    "depth":     self.initial_state.position.depth,
+                    "heading":   self.initial_state.angle.heading,
+                    "latitude":  self.initial_state.position.latitude,
+                    "longitude": self.initial_state.position.longitude,
+                    "speed":     self.initial_state.speed,
+                    "topic":     topic_name,
+                }
+            },
+            "sim_parameters": {
+                "start_clock": self.simulation_time,   # first tick
+                "end_clock":   None,
+            },
+        }
+
+        # Build path: <case_dir>/<topic>_params.yaml
+        file_name = topic_name.replace("_state", "_params.yaml")
+        self.yaml_path = Path(self.case_dir) / file_name
+        self.yaml_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self.yaml_path.open("w") as f:
+            yaml.safe_dump(content, f, sort_keys=False)
+
+        self.get_logger().info(f"Wrote YAML parameters to {self.yaml_path}")
+        self.yaml_written = True
+
+    def update_end_clock(self):
+        """
+        When the node terminates, open the YAML written earlier and patch
+        sim_parameters.end_clock with the last simulation_time.
+        """
+        if not self.yaml_path or not self.yaml_path.exists():
+            return  # nothing to do
+
+        with self.yaml_path.open() as f:
+            content = yaml.safe_load(f)
+
+        content["sim_parameters"]["end_clock"] = self.simulation_time
+
+        with self.yaml_path.open("w") as f:
+            yaml.safe_dump(content, f, sort_keys=False)
+
+        self.get_logger().info(
+            f"Updated end_clock={self.simulation_time} in {self.yaml_path}"
+        )
+
     def update_state(self, time_period):
         distance = self.current_state.speed * time_period
         endlon, endlat, _ = GEODESIC.fwd(
@@ -163,7 +240,8 @@ class Mammal(Node):
     def destroy_node(self):
         # Export data to bag file before shutting down
         self.get_logger().info("Node is shutting down, exporting data to bag file.")
-        self.export_as_bagfile()
+        self.update_end_clock()   
+        # self.export_as_bagfile() # TODO Uncomment export bag
         super().destroy_node()
 
     def check_state(self, state):
@@ -201,6 +279,9 @@ class Mammal(Node):
             self.current_state = self.update_state(time_period=60 * (temp - self.simulation_time))  # 60 because simulation_time is in min
             self.simulation_time = temp
 
+            if not self.yaml_written:
+                self.export_params_to_yaml()
+
             if self.simulation_time <= self.ETA:
                 local_simulation_time = self.simulation_time
                 local_ship_state = self.ship_state
@@ -211,7 +292,7 @@ class Mammal(Node):
 
                 if self.simulation_time == self.ETA:
                     thread.join()
-                    self.export_as_bagfile()
+                    # self.export_as_bagfile() # TODO Uncomment export bag
 
             if self.verbose_logging:
                 self.get_logger().info(f"Updated simulation time: {self.simulation_time} min")
@@ -256,12 +337,27 @@ class Mammal(Node):
         return model_output
 
     def compute_and_update_TL_msgs(self, local_simulation_time, local_ship_state, local_mammal_state):
-
-        if local_simulation_time < self.ETA:
+    # Only compute TL if we haven't hit ETA and we have a fresh ship state
+        if local_simulation_time < self.ETA and local_ship_state is not None:
             tl_msg = SPL()
             tl_msg.freq = [float(f) for f in self.TL_freq]
             tl_msg.spl = self.compute_transmission_loss(local_ship_state, local_mammal_state)
             self.TL_msgs[local_simulation_time] = tl_msg
+        else:
+            reasons = []
+            if local_simulation_time >= self.ETA:
+                reasons.append(
+                    f"sim time ({local_simulation_time}) ≥ ETA ({self.ETA})"
+                )
+            if local_ship_state is None:
+                reasons.append("no ship state available")
+            # If you want to be really verbose, you could also check mammal state:
+            if local_mammal_state is None:
+                reasons.append("no mammal state available")
+
+            reason_str = "; ".join(reasons)
+            print(f"Skipping TL @ t={local_simulation_time}: {reason_str}")
+
 
     def export_as_bagfile(self):
         if self.bag_exported is False: # IF the bag file is not exported yet

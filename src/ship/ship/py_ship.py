@@ -42,7 +42,6 @@ class Ship(Node):
         super().__init__('ship_node')
         self.setup_logger()
         self.case_study = str(src_dir / 'ship' / 'case_studies' / 'Case_3')
-        self.mammal_case_study = str(src_dir / 'mammals' / 'case_studies' / 'Case_C')
 
         # Clock publisher setup
         self.clock_publisher = self.create_publisher(Clock, '/clock', 10)
@@ -140,7 +139,6 @@ class Ship(Node):
         """Wait for topics starting with 'm' followed by a number, collect only state topics, 
         and start recording a ROS 2 bag file once they match with the number of YAML files and other specified topics."""
 
-        pattern = re.compile(r'^/m\d')  # Match topics starting with /m followed by digits
         static_topics = ['/ship_state', '/clock', '/source_noise_spl']
 
         while rclpy.ok():
@@ -153,24 +151,10 @@ class Ship(Node):
                 self.get_logger().warn(f"Missing static topics: {missing_static_topics}. Retrying...")
                 continue
 
-            mammal_state_topics = [topic_name for topic_name in available_topic_names if pattern.match(topic_name)]
-
-            yaml_files = [f for f in os.listdir(self.mammal_case_study) if f.endswith('.yaml')]
-            num_yaml_files = len(yaml_files)
-
-            if num_yaml_files == 0:
-                self.get_logger().error(f"No .yaml files found in directory: {self.mammal_case_study}. Aborting.")
-                return  
             
-            if len(mammal_state_topics) != num_yaml_files:  # Ensure the number of state topics matches YAML files
-                self.get_logger().warn(f"Mismatch between number of mammal state topics ({len(mammal_state_topics)}) "
-                                    f"and .yaml files ({num_yaml_files}). Retrying...")
-                rclpy.spin_once(self, timeout_sec=1.0)
-                continue
 
             # If the numbers match, proceed with recording
-            all_topics = mammal_state_topics + static_topics
-            self.get_logger().info(f"Found {len(mammal_state_topics)} state topics.")
+            all_topics = static_topics
             self.get_logger().warn(f"Recording the following topics: {all_topics}")
 
             try:
