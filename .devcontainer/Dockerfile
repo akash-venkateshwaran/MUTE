@@ -93,6 +93,7 @@ RUN pip3 install PyYAML
 RUN pip3 install h5py
 RUN pip3 install cartopy
 RUN pip3 install numpy-stl
+RUN pip3 install git-lfs
 # PBML:
 RUN pip install mesh-to-sdf
 RUN pip install pyglet==v1.5.28

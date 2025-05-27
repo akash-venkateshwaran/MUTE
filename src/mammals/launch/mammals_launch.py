@@ -14,7 +14,7 @@ from rclpy.parameter import Parameter
 import launch.logging
 
 
-from mammals.launch_utils import plot_species_samples, validate_samples, get_bounds, export_samples_to_yaml
+from mammals.launch_utils import plot_species_samples, validate_samples, get_bounds, export_samples_to_yaml, CSVMammalSampler
 
 from pathlib import Path
 
@@ -30,9 +30,16 @@ def find_src_dir(start_path: Path) -> Path:
 src_dir = find_src_dir(Path(__file__))
 
 base_directory = str(src_dir / 'mammals')
-case_directory = 'case_studies/Case_C' 
+case_directory = 'case_studies/Case_A' 
 TL_model_path = str(src_dir / 'noise_propagation_model' /'noise_propagation_model' / 'models' / 'RBF' / 'model')
+month = "Oct"
+csv_path = os.path.join(
+        base_directory,
+        "new_kde_models",
+        "posterior_mean_map.csv"
+    )
 
+csv_sampler = CSVMammalSampler(csv_path, month)
 
 # Note this case study path is to store the transmission loss as ros2 bag file next to the ship ros2 bag file. The reason I have to export is cause transmission loss computation might
 # not catup with the simulation time. Hence we need to run it in the bg
@@ -96,7 +103,7 @@ if clear_directory:
         num_mammals_per_species[species] = int(count)
 
 
-    shoreline_paths = os.path.join(base_directory, "data", "shoreline")
+    shoreline_paths = os.path.join(src_dir, "environment", "shoreline_data")
     shoreline = Polyshp(shoreline_paths)
     polygons = shoreline.get_polygons(lat_min, lat_max, lon_min, lon_max)
 
@@ -106,31 +113,27 @@ if clear_directory:
     for species, count in num_mammals_per_species.items():
         valid_samples = np.empty((0, 5))  # (lat lon depth heading speed)
         filename = f"kde_model_species_{species}.pickle"
-        kde_pop_path = os.path.join(base_directory, "kde_models", "population_data", filename)
         kde_dep_path = os.path.join(base_directory, "kde_models", "depth_data", filename)
-
-        if not os.path.exists(kde_pop_path) or not os.path.exists(kde_dep_path):
-            print(f"Error: KDE model file for species {species} not found in both population_data and depth_data directories.")
-            continue
-
-        with open(kde_pop_path, 'rb') as file:
-            kde_pop = pickle.load(file)
-
         with open(kde_dep_path, 'rb') as file:
             kde_dep = pickle.load(file)
 
         print(f"Sampling mammals of species {species}, {valid_samples.shape[0]}/{count}")
         while valid_samples.shape[0] < count:
             needed = count - valid_samples.shape[0]
-            samples_pop = kde_pop.sample(needed)
-            samples_pop[:, 0] = np.degrees(samples_pop[:, 0])  # Convert latitude
-            samples_pop[:, 1] = np.degrees(samples_pop[:, 1])  # Convert longitude
+
+            # replace KDE sampling with CSV sampling
+            samples_pop = csv_sampler.sample(needed)
+            # samples_pop[:, 0] = np.degrees(samples_pop[:, 0])  # Convert latitude
+            # samples_pop[:, 1] = np.degrees(samples_pop[:, 1])  # Convert longitude
+
             samples_dep = kde_dep.sample(needed)
             headings = np.random.uniform(-180, 180, size=(needed, 1))
-            speeds = np.random.uniform(1, 4, size=(needed, 1)) # The speed is from 1 m/s to 4 m/s for killer whales
+            speeds = np.random.uniform(1, 4, size=(needed, 1))  # 1–4 m/s speeds
+
             samples = np.hstack((samples_pop, samples_dep, headings, speeds))
-            
-            valid_samples_batch = validate_samples(samples, polygons, lat_min, lat_max, lon_min, lon_max)
+            valid_samples_batch = validate_samples(
+                samples, polygons, lat_min, lat_max, lon_min, lon_max
+            )
             valid_samples = np.vstack([valid_samples, valid_samples_batch])
 
         species_samples[species] = valid_samples[:count, :]

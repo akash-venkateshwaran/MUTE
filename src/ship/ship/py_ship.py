@@ -41,8 +41,8 @@ class Ship(Node):
     def __init__(self):
         super().__init__('ship_node')
         self.setup_logger()
-        self.case_study = str(src_dir / 'ship' / 'case_studies' / 'Case_3')
-        self.mammal_case_study = str(src_dir / 'mammals' / 'case_studies' / 'Case_C')
+        self.case_study = str(src_dir / 'ship' / 'case_studies' / 'Case_1')
+        self.mammal_case_study = str(src_dir / 'mammals' / 'case_studies' / 'Case_A')
 
         # Clock publisher setup
         self.clock_publisher = self.create_publisher(Clock, '/clock', 10)

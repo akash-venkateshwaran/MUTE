@@ -1,2 +1,2 @@
-ETA: 585
-Simulation Time: 585.00 minutes
+ETA: 741
+Simulation Time: 741.00 minutes

@@ -58,10 +58,10 @@ class SpeedOptimizer(Node):
     def __init__(self):
         super().__init__('speed_optimizer_node')
         self.waypoints = [] # List of HelperPositions
-        self.case_study = 'Case_3'
+        self.case_study = 'Case_1'
         self.skip_process = None
         self.TL_model_path = str(src_dir / 'noise_propagation_model' / 'noise_propagation_model' / 'models' / 'RBF' / 'model_single_freq')
-        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_3' / 'optimal_population_5000.csv')
+        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_1' / 'optimal_population_5000.csv')
 
 
         self.timestep = 0.15 # hrs (usually 0.15)
@@ -71,6 +71,8 @@ class SpeedOptimizer(Node):
 
         self.min_v = None  # knots Note that if you set it to zero then log10(V/V_C) is not defined
         self.max_v = None # knots
+        self.acc_max =  36.60 # knots/h
+        self.acc_min =  -33.00 # knots/h
         self.path_length = 0.0  # NM
         self.n_waypoints = 0
         self.optimized_speed = [] # knots
@@ -171,7 +173,7 @@ class SpeedOptimizer(Node):
 
     def load_shoreline(self, lat_min, lat_max, lon_min, lon_max):
         """Load shoreline data based on bounds."""
-        shoreline_paths = src_dir / "mammals" / "data" / "shoreline"
+        shoreline_paths = src_dir / "environment" / "shoreline_data"
         shoreline = Polyshp(shoreline_paths)
         self.shoreline_polygons = shoreline.get_polygons(lat_min, lat_max, lon_min, lon_max)
 
@@ -353,7 +355,7 @@ class SpeedOptimizer(Node):
             extra_time = (self.remaining_time / self.timestep) - n_var  # The time not accounted due to divisibility
 
             problem = SpeedOptimizationProblem(
-                n_var=n_var, n_obj=1, n_constr=1,
+                n_var=n_var, n_obj=1, acc_min = self.acc_min, acc_max = self.acc_max,
                 xl=self.min_v, xu=self.max_v, waypoints=self.waypoints,
                 timestep=self.timestep, mammal_states=self.mammal_current_states,
                 shoreline_polygons=self.shoreline_polygons, freq=self.freq,

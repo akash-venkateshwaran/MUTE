@@ -21,12 +21,20 @@ from speed_optimization.py_objective2 import SpeedOptimizationObjective
 GEODESIC = Geod(ellps="WGS84")
 
 class SpeedOptimizationProblem(Problem):
-    def __init__(self, n_var, n_obj, n_constr, xl, xu, timestep, waypoints: list[HelperPosition], mammal_states:list[State], shoreline_polygons: list[Polygon], freq: np.ndarray, ship_type: str, ship_length: float, extra_time: float, TL_model_path: str):
-        super().__init__(n_var=n_var, n_obj=n_obj, n_constr=n_constr, xl=xl, xu=xu)
+    def __init__(self, n_var, n_obj, xl, xu, timestep, waypoints: list[HelperPosition], mammal_states:list[State], shoreline_polygons: list[Polygon], freq: np.ndarray,
+                 ship_type: str, ship_length: float, extra_time: float, TL_model_path: str,
+                 acc_min=-10.5,                #  knots/h  (deceleration allowed)
+                 acc_max=+10.5,                #  knots/h  (acceleration allowed)
+                 ):
+        
+        n_ieq_constr = 1 + 2 * (n_var - 1)
+        super().__init__(n_var=n_var, n_obj=n_obj, n_constr=n_ieq_constr, xl=xl, xu=xu)
         self.waypoints = waypoints
         self.path_length = calculate_path_length(waypoints)
         self.timestep = timestep
-        self.acc_limit = 1.5 
+        self.acc_min = acc_min
+        self.acc_max = acc_max
+
         self.extra_time = extra_time  # Extra time due to divisiblity(hrs)
         self.speed_objective = SpeedOptimizationObjective(timestep=timestep,waypoints=waypoints,mammal_states=mammal_states,
                                                            shoreline_polygons=shoreline_polygons, freq = freq, 
@@ -41,24 +49,18 @@ class SpeedOptimizationProblem(Problem):
         total_travelled_distance = travelled_distance + extra_travelled_distance 
 
         out["F"] = self.speed_objective.cost_function_noise(x=x)
-        out["G"] = np.abs(total_travelled_distance - self.path_length) - 0.1 
+
+        g_dist = np.abs(total_travelled_distance - self.path_length) - 0.1      # shape (pop,)
+        acc = np.diff(x, axis=1) / self.timestep                  # shape (pop, n_var-1)
+
+        g_acc_upper = acc - self.acc_max                          #   acc ≤ acc_max
+        g_acc_lower = self.acc_min - acc                          #   acc ≥ acc_min
+
+        # flatten the two acc matrices and concatenate with g_dist
+        out["G"] = np.hstack((g_dist[:, None],
+                              g_acc_upper,
+                              g_acc_lower))
     
-    def calculate_acc(x: np.ndarray, timestep: float):
-        """
-        Calculates the difference of consecutive columns for each row in a matrix.
-
-        Parameters:
-            x (numpy.ndarray): Input matrix of size (n, m).
-
-        Returns:
-            numpy.ndarray: Output matrix of size (n, m-1)which is the acc of each sailing leg in NM/h^2 or knots/h
-        """
-        if x.shape[1] < 2:
-            raise ValueError("Input matrix must have at least two columns.")
-
-        # Compute the difference along columns (axis=1)
-        acc = np.diff(x, axis=1) / timestep
-        return acc
 
 class SpeedOptimizationCallback(Output):
     def __init__(self, export_path,  every_n_gen=100, initial_gen = 0):

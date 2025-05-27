@@ -23,6 +23,7 @@ setup(
     ] + package_files('case_studies')
       + package_files('data')
       + package_files('kde_models')
+      + package_files('New_kde_models')
       + package_files('plot'),
     install_requires=['setuptools'],
     zip_safe=True,

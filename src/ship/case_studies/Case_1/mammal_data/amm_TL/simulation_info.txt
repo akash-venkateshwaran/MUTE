@@ -1,2 +1,0 @@
-ETA: 585
-Simulation Time: 0.00 minutes

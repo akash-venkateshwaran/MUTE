@@ -10,6 +10,41 @@ import rclpy
 from custom_interfaces.srv import BoundsService
 import yaml
 from typing import Dict
+import pandas as pd
+
+class CSVMammalSampler:
+    """
+    Reads a CSV of mammal-location intensities and draws random samples
+    in proportion to those intensities.
+
+    On initialization:
+      - Loads the CSV and checks that the given month’s intensity column
+        (e.g. "May_intensity") is present.
+      - Extracts all (lat, lon) pairs.
+      - Normalizes the intensity values so they sum to 1 (or uses a uniform
+        distribution if all intensities are zero).
+
+    The `sample(n)` method:
+      - Uses numpy.random.choice with the normalized intensities as probabilities
+        to select n indices (rows) from the data.
+      - Returns the corresponding (lat, lon) coordinates as an (n, 2) array.
+    """
+    def __init__(self, csv_path: str, month: str):
+        df = pd.read_csv(csv_path)
+        if month not in df.columns:
+            raise ValueError(f"'{month}' column not in CSV")
+        self.month = month
+        # extract lat/lon and probability
+        self.latlon = df[['lat', 'lon']].to_numpy()
+        prob = df[f"{month}_intensity"].values
+
+        prob = prob / prob.sum() if prob.sum() else np.full_like(prob, 1/len(prob))
+        self.prob = prob
+
+    def sample(self, n: int) -> np.ndarray:
+        idx = np.random.choice(len(self.prob), size=n, p=self.prob)
+        return self.latlon[idx]
+    
 
 def get_bounds():
     rclpy.init()
@@ -35,15 +70,18 @@ def get_bounds():
 
 def validate_samples(samples, polygons, lat_min, lat_max, lon_min, lon_max):
     """ Checks if the sample lies in water and has depth greater than zero"""
+
     points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(samples[:, 1], samples[:, 0]))
     valid_points = points[(points.geometry.x >= lon_min) & 
                           (points.geometry.x <= lon_max) & 
                           (points.geometry.y >= lat_min) & 
                           (points.geometry.y <= lat_max)]
-    for polygon in polygons:
-        valid_points = valid_points[~valid_points.within(polygon)]
+    
+    for poly in polygons.geometry: 
+        valid_points = valid_points[~valid_points.within(poly)]
     valid_indices = valid_points.index
     valid_indices = valid_indices[samples[valid_indices, 2] > 0]
+
     return samples[valid_indices]
 
 def plot_species_samples(species_samples, polygons, directory):

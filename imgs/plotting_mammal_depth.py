@@ -6,13 +6,53 @@ import pickle
 from scipy.interpolate import interp1d
 from sklearn.neighbors import KernelDensity
 import sys
+from pathlib import Path as Path2
 
-# Add path to the audiogram function
-sys.path.append('/workspaces/MELO_workspace/src/mammals/audiogram_func')
-from audiog import audiogram_function
+def find_src_dir(start_path: Path2) -> Path2:
+    """
+    Search upward from the start_path until a directory containing a 'src' folder is found.
+    Returns the path to that 'src' folder.
+    """
+    current = start_path.resolve()
+    while current != current.parent:  # stop at filesystem root
+        candidate = current / "src"
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+        current = current.parent
+    raise FileNotFoundError("Could not find a 'src' directory in any parent directories.")
+
+src_dir = find_src_dir(Path2(__file__))
+
+
+
+def audiogram_function(freq_Hz):
+    """
+    Computes the threshold (th) for an array of frequencies in Hz
+    using the audiogram function from  Killer whale (Orcinus orca) behavioral audiograms JASA (2017).
+
+    Parameters:
+    freq_Hz (numpy array): Frequency in Hz
+
+    Returns:
+    numpy array: Threshold (th) in dB
+    """
+    # Parameters for the audiogram function
+    T0 = 44.13
+    F1 = 12.55  # in kHz
+    F2 = 26.50  # in kHz
+    A = 40.58
+    B = 2.74
+
+    # Convert frequency from Hz to kHz
+    freq_kHz = freq_Hz / 1000
+
+    # Calculate threshold
+    th = T0 + A * np.log10(1 + (F1 / freq_kHz)) + (freq_kHz / F2) ** B
+
+    return th
 
 # Load data from CSV file
-csv_file = '/workspaces/MELO_workspace/src/mammals/data/depth_data/species_1.csv'
+csv_file = str(src_dir / 'mammals' / 'data/depth_data' / 'species_1.csv')
 data = pd.read_csv(csv_file)
 
 # Extract depths and counts
@@ -26,8 +66,8 @@ for depth, count in zip(depths, sample_counts):
 samples = np.array(samples)
 
 # Paths
-kde_model_path = '/workspaces/MELO_workspace/src/mammals/kde_models/depth_data/kde_model_species_0.pickle'
-output_path = '/workspaces/MELO_workspace/imgs/Mammal_depth_distribution_and_audiogram.png'
+kde_model_path = str(src_dir / 'mammals' / 'kde_models/depth_data' / 'kde_model_species_0.pickle')
+output_path = '/workspaces/MUTE_v1/imgs/Mammal_depth_distribution_and_audiogram.png'
 
 # Load KDE from pickle file
 try:

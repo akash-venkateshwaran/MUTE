@@ -1,0 +1,8 @@
+m0_2:
+  ros__parameters:
+    depth: 2.9190570030051877
+    heading: -102.00829954325633
+    latitude: 49.05672982236413
+    longitude: -123.2797082053582
+    speed: 1.41
+    topic: m0_2_state

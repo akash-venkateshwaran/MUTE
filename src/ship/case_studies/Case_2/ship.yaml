@@ -1,5 +1,5 @@
 ship_info:
-  ship_type: 'Bulker'
+  ship_type: 'Other'
   ship_name: 'STAR KILIMANJARO'
   max_v : 15.9 # knots
   min_v : 8.0 # knots
