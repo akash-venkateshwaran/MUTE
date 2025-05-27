@@ -153,3 +153,15 @@ RUN echo "if [ -f ${WORKSPACE}/install/setup.bash ]; then source ${WORKSPACE}/in
 # source /usr/share/gazebo/setup.sh
 
 # You need to include the folders inside a pkg in the setup.py to include them in install/share/pkg
+
+
+# Instructions to install git lfs:
+    # 1. Add the Git-LFS package repository
+    # curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+    # (If your container doesn’t have sudo or you’re already root, just drop 'sudo'.)
+
+    # 2. Install the Git-LFS binary
+    # sudo apt-get install -y git-lfs
+
+    # 3. Activate Git-LFS for your user (creates global hooks/config)
+    # git lfs install
