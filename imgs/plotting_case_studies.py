@@ -1,4 +1,3 @@
-
 import pandas as pd
 import matplotlib.pyplot as plt
 import geopandas as gpd
@@ -6,18 +5,16 @@ from shapely.geometry import Point, Polygon
 
 # Paths to the CSV files based on the directory structure
 csv_files = [
-    '/workspaces/MELO_workspace/src/path_planning/case_studies/Case_1/case_study.csv',
-    '/workspaces/MELO_workspace/src/path_planning/case_studies/Case_2/case_study.csv',
-    '/workspaces/MELO_workspace/src/path_planning/case_studies/Case_3/case_study.csv'
+    '/workspaces/MUTE_v1/src/path_planning/case_studies/Case_1/case_study.csv',
+    '/workspaces/MUTE_v1/src/path_planning/case_studies/Case_3/case_study.csv'
 ]
-case_names = ['Case 1', 'Case 2', 'Case 3']
-ship_plane_path = '/workspaces/MELO_workspace/src/environment/ship_lanes_data/new_ship_lanes_polys.shp'
+case_names = ['Case 1', 'Case 3']
+ship_plane_path = '/workspaces/MUTE_v1/src/environment/ship_lanes_data/new_ship_lanes_polys.shp'
 
+# Colors for each case - standard blue and red
+colors = ['blue', 'red']
 
-# Colors for each case (RGB format)
-colors = [(0.1, 0.2, 0.8), (0.2, 0.7, 0.3), (0.8, 0.1, 0.1)]  # Blue, Green, Red
-
-# Load and store the data
+# Load and store the data (only Case 1 and Case 3)
 data = [pd.read_csv(file, names=['Voyage Time', 'Speed', 'Longitude', 'Latitude']) for file in csv_files]
 
 # Extract latitude and longitude data for geoplotting
@@ -37,7 +34,7 @@ locations_df = gpd.GeoDataFrame(geometry=[Point(lon, lat) for lat, lon in locati
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 15))
 
 # Load shoreline/islands data with black border
-shoreline = gpd.read_file('/workspaces/MELO_workspace/src/environment/shoreline_data')
+shoreline = gpd.read_file('/workspaces/MUTE_v1/src/environment/shoreline_data')
 
 shoreline.plot(ax=ax1, color='lightgrey', edgecolor='black')  # Add black border
 
@@ -61,14 +58,14 @@ ship_plane_remainder.plot(ax=ax1, color='blue', alpha=0.3, edgecolor='black')
 ax1.set_xlim(-125.72143254685919, -121.78283374169551)
 ax1.set_ylim(47.95629176783697, 49.5104276496541)
 ax1.set_title('Voyage Paths with Key Locations', fontfamily="Times New Roman")
-ax1.set_xlabel('Longitude', fontfamily="Times New Roman")
-ax1.set_ylabel('Latitude', fontfamily="Times New Roman")
+ax1.set_xlabel('Longitude', fontfamily="Times New Roman", fontsize=18)
+ax1.set_ylabel('Latitude', fontfamily="Times New Roman", fontsize=18)
+ax1.tick_params(axis='both', which='major', labelsize=18)
 
 # Custom legend with black markers for Departure and Destination
 custom_legend = [
     plt.Line2D([0], [0], color=colors[0], lw=2, label='Case 1'),
-    plt.Line2D([0], [0], color=colors[1], lw=2, label='Case 2'),
-    plt.Line2D([0], [0], color=colors[2], lw=2, label='Case 3'),
+    plt.Line2D([0], [0], color=colors[1], lw=2, label='Case 3'),
     plt.Line2D([0], [0], color='black', marker='^', linestyle='None', markersize=8, label='Key Locations'),
     plt.Line2D([0], [0], color='black', marker='o', linestyle='None', markersize=8, label='Departure'),
     plt.Line2D([0], [0], color='black', marker='s', linestyle='None', markersize=8, label='Destination')
@@ -77,25 +74,28 @@ ax1.legend(handles=custom_legend, loc='upper right', prop={"family": "Times New 
 
 # Plot velocity profile in the second subplot with specified colors and start/end markers
 for i, df in enumerate(data):
-    ax2.plot(df['Voyage Time'], df['Speed'], color=colors[i], label=case_names[i])
+    ax2.plot(df['Voyage Time'], df['Speed'], color=colors[i], label=case_names[i], linewidth=3)
     # Start and End markers in the same color as the line
     ax2.plot(df['Voyage Time'].iloc[0], df['Speed'].iloc[0], 'o', color=colors[i], markersize=8)
     ax2.plot(df['Voyage Time'].iloc[-1], df['Speed'].iloc[-1], 's', color=colors[i], markersize=8)
 
 # Configure velocity plot, starting voyage time from 0
 ax2.set_xlim(left=0)
+ax2.set_ylim(8, 18)  # Set y-axis limits from 8 to 16
 ax2.set_title('Velocity Profile over Voyage Time', fontfamily="Times New Roman")
-ax2.set_xlabel('Voyage Time (minutes)', fontfamily="Times New Roman")
-ax2.set_ylabel('Vessel Speed (kt)', fontfamily="Times New Roman")
+ax2.set_xlabel('Voyage Time (minutes)', fontfamily="Times New Roman", fontsize=18)
+ax2.set_ylabel('Ship speed (knots)', fontfamily="Times New Roman", fontsize=18)
+ax2.tick_params(axis='both', which='major', labelsize=18)
 ax2.legend(case_names, loc='upper right', prop={"family": "Times New Roman"})
+
 
 # Set all fonts to Times New Roman
 plt.rcParams['font.family'] = 'Times New Roman'
-plt.rcParams.update({'font.size': 12})
+plt.rcParams.update({'font.size': 18})
 plt.tight_layout()
 
 # Save the figure as a PNG file with specified size
-output_path = '/workspaces/MELO_workspace/imgs/voyage_plots.png'
+output_path = '/workspaces/MUTE_v1/imgs/voyage_plots.png'
 # fig.set_size_inches(10, 25)  # Fixed size before saving
 plt.savefig(output_path, dpi=300)
-plt.show()
+plt.close()

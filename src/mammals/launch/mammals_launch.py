@@ -7,10 +7,7 @@ import os
 import pickle
 import numpy as np
 from environment.py_polyshp import Polyshp
-import geopandas as gpd
-from shapely.geometry import box
 import shutil
-from rclpy.parameter import Parameter
 import launch.logging
 
 
@@ -30,8 +27,10 @@ def find_src_dir(start_path: Path) -> Path:
 src_dir = find_src_dir(Path(__file__))
 
 base_directory = str(src_dir / 'mammals')
-case_directory = 'case_studies/Case_A' 
-TL_model_path = str(src_dir / 'noise_propagation_model' /'noise_propagation_model' / 'models' / 'RBF' / 'model')
+
+
+
+case_directory = 'case_studies/Case_D' 
 month = "Oct"
 csv_path = os.path.join(
         base_directory,
@@ -43,12 +42,16 @@ csv_sampler = CSVMammalSampler(csv_path, month)
 
 # Note this case study path is to store the transmission loss as ros2 bag file next to the ship ros2 bag file. The reason I have to export is cause transmission loss computation might
 # not catup with the simulation time. Hence we need to run it in the bg
-bag_export_dir = str(src_dir / 'ship' / case_directory / 'mammal_data')
 
+TL_MODEL_PATH   = str(src_dir / 'noise_propagation_model' /'noise_propagation_model' / 'models' / 'RBF' / 'model')
+BAG_EXPORT_DIR  = str(src_dir / 'ship' / case_directory / 'mammal_data')
+SHORELINE_PATH  = str(src_dir / "environment" / "shoreline_data")
 
 
 case_directory_path = os.path.join(base_directory, case_directory)
 clear_directory = True
+bounds = get_bounds()
+
 if os.path.exists(case_directory_path) and os.listdir(case_directory_path):
     while True:
         permission = input(f"The directory {case_directory_path} is not empty. Do you want to clear it? (y/n): ")
@@ -64,25 +67,24 @@ if os.path.exists(case_directory_path) and os.listdir(case_directory_path):
             print("Invalid input. Please enter 'y' or 'n'.")
 
 
-if os.path.exists(bag_export_dir):
-    user_input = input(f"The directory {bag_export_dir} already exists for bag files. Do you want to delete it? (y/n): ").strip().lower()
+if os.path.exists(BAG_EXPORT_DIR):
+    user_input = input(f"The directory {BAG_EXPORT_DIR} already exists for bag files. Do you want to delete it? (y/n): ").strip().lower()
 
     if user_input == 'y':
         try:
-            shutil.rmtree(bag_export_dir)
-            print(f"Deleted existing directory: {bag_export_dir}")
+            shutil.rmtree(BAG_EXPORT_DIR)
+            print(f"Deleted existing directory: {BAG_EXPORT_DIR}")
         except Exception as e:
             print(f"Failed to delete directory: {e}")
             raise
     else:
         print("User chose not to delete the directory. Aborting.")
 else:
-    os.makedirs(bag_export_dir)
-    print(f"Created new directory: {bag_export_dir}")
+    os.makedirs(BAG_EXPORT_DIR)
+    print(f"Created new directory: {BAG_EXPORT_DIR}")
 
 if clear_directory:
 # Fetch bounds using the service
-    bounds = get_bounds()
     lat_max = bounds.max_lat
     lat_min = bounds.min_lat
     lon_max = bounds.max_lon
@@ -148,34 +150,48 @@ else:
             node_name = filename.replace('_params.yaml', '')
             yaml_files[node_name] = os.path.join(case_directory_path, filename)
             temp += 1
+
+    MAMMAL_YAML_LIST = [(name, path) for name, path in yaml_files.items()]
+
     print("Total number of mammals processing:", temp)
 
 
 def generate_launch_description():
-    launch_description = LaunchDescription()
     logger = launch.logging.get_logger('launch')
 
-
-    if not os.path.exists(TL_model_path):
-        logger.error(f"TL_model_path does not exist: {TL_model_path}")
+    if not os.path.exists(TL_MODEL_PATH):
+        logger.error(f"TL_model_path does not exist: {TL_MODEL_PATH}")
         exit(1)
+    
+    bounds_dict = {
+        'lat_max': bounds.max_lat,
+        'lat_min': bounds.min_lat,
+        'lon_max': bounds.max_lon,
+        'lon_min': bounds.min_lon,
+    }
 
-    for node_name, yaml_file_path in yaml_files.items():
-        print(f"Launching node {node_name} with parameters from: {yaml_file_path}")
+    manager = Node(
+        package    ='mammals',
+        executable ='mammal_manager',
+        name       ='mammal_manager',
+        output     ='screen',
+        parameters =[{
+            'mammal_yaml_paths': [p for _, p in MAMMAL_YAML_LIST],
+            'mammal_names'    : [n for n, _ in MAMMAL_YAML_LIST],
+            'bag_dir'         : BAG_EXPORT_DIR,
+            'tl_model_path'   : TL_MODEL_PATH,
+            'shoreline_path'  : SHORELINE_PATH,
+            # Pass bounds as individual parameters with namespace
+            'bounds.lat_max'  : bounds_dict['lat_max'],
+            'bounds.lat_min'  : bounds_dict['lat_min'],
+            'bounds.lon_max'  : bounds_dict['lon_max'],
+            'bounds.lon_min'  : bounds_dict['lon_min'],
+        }],
+    )
 
-        node = Node(
-            package='mammals',
-            executable='mammal_exe',
-            name=node_name,
-            parameters=[
-                yaml_file_path, 
-                {'bag_dir': bag_export_dir, 'TL_model_path': TL_model_path}
-            ],
-            output='screen'
-        )
-        launch_description.add_action(node)
+    return LaunchDescription([manager])
 
-    return launch_description
+
 
 if __name__ == "__main__":
     generate_launch_description()

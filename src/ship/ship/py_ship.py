@@ -42,7 +42,7 @@ class Ship(Node):
         super().__init__('ship_node')
         self.setup_logger()
         self.case_study = str(src_dir / 'ship' / 'case_studies' / 'Case_1')
-        self.mammal_case_study = str(src_dir / 'mammals' / 'case_studies' / 'Case_A')
+        self.mammal_case_study = str(src_dir / 'mammals' / 'case_studies' / 'Case_D')
 
         # Clock publisher setup
         self.clock_publisher = self.create_publisher(Clock, '/clock', 10)
@@ -306,6 +306,7 @@ class Ship(Node):
     def compute_current_speed(self) -> float:
         """
         Note that this function returns speed in knots because self.optimized_speed is in knots
+        Also, even if the recieved speed profile has high timestep (> 1 min) btw each indx then the index is repeated
         """
         num_intervals = len(self.optimized_speed)
         interval_duration = self.ETA / num_intervals

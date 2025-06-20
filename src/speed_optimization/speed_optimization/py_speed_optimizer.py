@@ -6,13 +6,23 @@ from pymoo.algorithms.soo.nonconvex.ga import GA
 from pymoo.optimize import minimize
 from pymoo.operators.sampling.rnd import FloatRandomSampling
 
+
+from multiprocessing.pool import ThreadPool
+from pymoo.core.problem import StarmapParallelization
+import time
+YELLOW = "\033[93m"
+RESET  = "\033[0m"
+RED = "\033[91m"
+
+from speed_optimization.timer import timed
+from speed_optimization.timer import print_stats
+
 import yaml
 import pandas as pd
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from custom_interfaces.srv import BoundsService
-
 
 import re
 import os
@@ -26,7 +36,7 @@ from matplotlib.path import Path
 from matplotlib.patches import PathPatch
 
 
-from speed_optimization.py_pymoo_config import SpeedOptimizationProblem, SpeedOptimizationCallback, AdaptiveMutation, AdaptiveCrossover
+from speed_optimization.py_pymoo_config import SpeedOptimizationProblem, SpeedOptimizationCallback, AdaptiveMutation, AdaptiveCrossover, AccelerationRepairOperator
 from custom_interfaces.msg import State, HelperPosition, HeadingAngle, Path, Speed
 from speed_optimization.py_util import calculate_path_length
 
@@ -61,18 +71,20 @@ class SpeedOptimizer(Node):
         self.case_study = 'Case_1'
         self.skip_process = None
         self.TL_model_path = str(src_dir / 'noise_propagation_model' / 'noise_propagation_model' / 'models' / 'RBF' / 'model_single_freq')
-        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_1' / 'optimal_population_5000.csv')
+        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_1' / 'optimal_population_1800.csv')
+        self.acc_max = 36.60 # knots/h
+        self.acc_min = -33.00 # knots/h
 
 
-        self.timestep = 0.15 # hrs (usually 0.15)
+        self.timestep = (3/60) # hrs (usually 0.15)
+        self.obj_computation_step = 1 # NOTE This is the step number at which TL and SL is calclated wrt the ship/mammal traj. Default is 1 means at every step of traj, the TL is calculated
         self.ETA = None  # hrs
         self.simulation_time = 0.0  # hrs
         self.remaining_time = None # hrs
 
         self.min_v = None  # knots Note that if you set it to zero then log10(V/V_C) is not defined
         self.max_v = None # knots
-        self.acc_max =  36.60 # knots/h
-        self.acc_min =  -33.00 # knots/h
+       
         self.path_length = 0.0  # NM
         self.n_waypoints = 0
         self.optimized_speed = [] # knots
@@ -89,7 +101,10 @@ class SpeedOptimizer(Node):
         self.solve_optimization_thread = None
         self.previous_solution_num_gen = 0
         self.previous_population = None
-        self.num_gen = 5000
+        self.num_gen = 3000 # TODO Change this to 3000
+        self.pop_size = 1000
+        self.pre_optimize = False # NOTE I tried to do the pre opt and perform biased pop initialization but the solutions didn't turn out good so always keep it False
+        self.pre_optimize_gens = 1000
 
         self.load_voyage_definition(self.case_study)
 
@@ -97,7 +112,6 @@ class SpeedOptimizer(Node):
         self.shoreline_polygons = None
         if not self.skip_process:
             self.get_the_shoreline()
-
 
         ######### Publishers:
         self.optimized_speed_publisher = self.create_publisher(Speed, 'optimized_speeds', 10)
@@ -287,8 +301,6 @@ class SpeedOptimizer(Node):
     def ship_optimized_waypoints_callback(self, msg):
         self.has_received_waypoints = True
 
-        
-
         if any(state is None for state in self.mammal_current_states):
             self.get_logger().warn("Skipping optimization as all mammal information has not been received.")
             return
@@ -296,9 +308,10 @@ class SpeedOptimizer(Node):
         if self.simulation_time is None or self.remaining_time is None:
                         self.get_logger().info(f"Simulation time ({self.simulation_time}) or remaining time ({self.remaining_time}) is None. Skipping")
         else:
-            if self.solve_optimization_thread is not None and self.solve_optimization_thread.is_alive():
-                self.get_logger().info("Solving")
-            else:
+            # TODO Uncomment these three lines:
+            # if self.solve_optimization_thread is not None and self.solve_optimization_thread.is_alive():
+            #     self.get_logger().info("Solving")
+            # else:
                 if calculate_path_length(msg.waypoints) != self.path_length:
                     self.waypoints = msg.waypoints  # Update the waypoints list
                     self.n_waypoints = len(self.waypoints)
@@ -314,8 +327,9 @@ class SpeedOptimizer(Node):
                                 self.run_speed_optimization()
                         else:
                             self.get_logger().info(f"The number of generation already exceeded ({self.previous_solution_num_gen} >= {self.num_gen}). Skipping")
-                else:
-                    self.get_logger().info(f"Received the same path. Skipping ({calculate_path_length(msg.waypoints)} == {self.path_length})")
+                # TODO Undo these two lines of code:
+                # else:
+                #     self.get_logger().info(f"Received the same path. Skipping ({calculate_path_length(msg.waypoints)} == {self.path_length})")
 
     def run_speed_optimization(self):
             try:
@@ -346,86 +360,248 @@ class SpeedOptimizer(Node):
             if self.remaining_time < 0:
                 self.get_logger().error("Simulation time exceeded the ETA, cannot continue optimization.")
 
-    def optimize_speed(self, total_gen, previous_gen, previous_pop=None):
-        if any(state is not None for state in self.mammal_current_states):
 
-            self.get_logger().info("Performing speed optimization based on received waypoints.")
-            self.get_logger().info(f"Number of variables: {int(self.remaining_time / self.timestep)}")
-            n_var = int(self.remaining_time / self.timestep)
-            extra_time = (self.remaining_time / self.timestep) - n_var  # The time not accounted due to divisibility
 
-            problem = SpeedOptimizationProblem(
-                n_var=n_var, n_obj=1, acc_min = self.acc_min, acc_max = self.acc_max,
-                xl=self.min_v, xu=self.max_v, waypoints=self.waypoints,
-                timestep=self.timestep, mammal_states=self.mammal_current_states,
-                shoreline_polygons=self.shoreline_polygons, freq=self.freq,
-                ship_type=self.ship_type, ship_length=self.ship_length,
-                extra_time=extra_time, TL_model_path=self.TL_model_path
-            )
+    def make_biased_sampling(self, base_profile: np.ndarray,
+                         pop_size: int,
+                         lb: float,
+                         ub: float,
+                         noise_std: float = 0.15) -> np.ndarray:
+        """
+        Create an initial population whose first individual is `base_profile`
+        and the remaining `pop_size-1` individuals are random perturbations
+        around it (clipped to [lb, ub]).
+        """
+        n_var = base_profile.size
+        X = np.empty((pop_size, n_var), dtype=float)
+        X[0] = base_profile
 
-            callback_obj = SpeedOptimizationCallback(
-                export_path=src_dir / 'ship' / 'case_studies' / self.case_study,
-                every_n_gen=200,
-                initial_gen=previous_gen
-            )
+        # Draw Gaussian noise and clip
+        perturbed = base_profile + noise_std * (ub - lb) * np.random.randn(pop_size - 1, n_var)
+        X[1:] = np.clip(perturbed, lb, ub)
 
+        return X
+# --------------------------------------------------------------------- #
+
+
+    def create_speed_optimization_setup(self, n_var: int, extra_time: float, 
+                                   export_path, every_n_gen: int, 
+                                   initial_gen: int, sampling, timestep:float):
+        """
+        Create and configure the optimization problem, callback, and algorithm.
+        
+        Returns:
+            tuple: (problem, callback, algorithm)
+        """
+        # Create the optimization problem
+        problem = SpeedOptimizationProblem(
+            n_var = n_var, n_obj = 1,
+            acc_min = self.acc_min, acc_max = self.acc_max,
+            xl = self.min_v, xu = self.max_v,
+            waypoints = self.waypoints,
+            timestep = timestep,
+            mammal_states = self.mammal_current_states,
+            shoreline_polygons = self.shoreline_polygons,
+            freq = self.freq,
+            ship_type = self.ship_type,
+            ship_length = self.ship_length,
+            extra_time = extra_time,
+            TL_model_path = self.TL_model_path,
+            obj_computation_step = self.obj_computation_step
+        )
+        
+        # Create callback for tracking convergence
+        callback = SpeedOptimizationCallback(
+            export_path = export_path,
+            every_n_gen = every_n_gen,
+            initial_gen = initial_gen
+        )
+        
+        # Create GA algorithm
+        repair_op = AccelerationRepairOperator(max_iter=5)
+        algorithm = GA(
+            pop_size = self.pop_size,
+            eliminate_duplicates = True,
+            repair = repair_op,
+            sampling = sampling
+        )
+        
+        return problem, callback, algorithm
+
+
+    def post_process_results(self, res, problem, callback, total_gen: int, timestep: float,
+                            is_pre_opt: bool = False):
+        """
+        Post-process optimization results including logging, plotting, and storing results.
+        
+        Args:
+            res: Optimization result
+            problem: The optimization problem instance
+            callback: The callback instance with convergence data
+            total_gen: Total number of generations
+            is_pre_opt: Whether this is pre-optimization or main optimization
+        """
+        if res.X is not None:
+            # Calculate and log distance
+            total_distance = float(np.sum(res.X) * timestep)
+            opt_type = "Pre-opt" if is_pre_opt else "Main opt"
+            self.get_logger().info(f"✅ {opt_type} finished — distance = {total_distance:.2f} NM")
             
-
-            adaptive_mutation = AdaptiveMutation(initial_rate=0.3, final_rate=0.01, n_gen=total_gen)
-            adaptive_crossover = AdaptiveCrossover(initial_rate=0.95, final_rate=0.7, n_gen=total_gen)
-
-            num_new_generations = total_gen - previous_gen
-
-            if previous_pop is None:
-                self.get_logger().info("Initializing population randomly.")
-                sampling = FloatRandomSampling()  # Default random sampling
-            else:
-                self.get_logger().info("Initializing population from previous solution.")
-                sampling = previous_pop
-                assert previous_pop is None or previous_pop.shape[1] == n_var, (
-                        f"Mismatch between the number of variables (n_var={n_var}) and the population shape {previous_pop.shape[1]}.")
-
-            algorithm = GA(
-                pop_size=200,
-                eliminate_duplicates=True,
-                mutation=adaptive_mutation,
-                crossover=adaptive_crossover,
-                sampling=sampling
-            )
-
-            res = minimize(
-                problem,
-                algorithm,
-                termination=('n_gen', num_new_generations),
-                callback=callback_obj
-            )
-
-            self.get_logger().info(f"Optimized speeds in knots: {res.X}")
-            self.get_logger().info(f"Total dist covered after optimization (NM): {np.sum(np.array(res.X) * self.timestep)}")
-
-            min_f_values = callback_obj.min_f_values
-
-            plt.plot(min_f_values)
-            plt.xlabel('Generation')
-            plt.ylabel('Min F')
-            plt.title('Convergence Plot')
-            filename = "speed_opt_convergence.png"
-            plt.savefig(f"imgs/{filename}")
+            if not is_pre_opt:
+                # Store results for main optimization
+                self.optimized_speed = res.X
+                self.previous_solution_num_gen = total_gen
+                self.get_logger().info(f"Optimised speeds (knots): {res.X}")
+                self.get_logger().info(f"Total distance after optimisation: {total_distance:.2f} NM")
+            
+            # Create convergence plot
+            plt.plot(callback.min_f_values)
+            plt.xlabel("Generation")
+            plt.ylabel("Min F")
+            plot_title = "Pre-optimisation Convergence" if is_pre_opt else "Convergence Plot"
+            plt.title(plot_title)
+            plt.tight_layout()
+            
+            plot_filename = "imgs/pre_opt_convergence.png" if is_pre_opt else "imgs/speed_opt_convergence.png"
+            plt.savefig(plot_filename)
             plt.close()
+            
+            # Create route/speed plot
+            if is_pre_opt:
+                self.plot_speeds(problem, res.X, timestep, filename="pre_optimized_speed_and_positions.png")
+            else:
+                self.plot_speeds(problem, res.X, timestep)   # existing filename logic
+                
+        else:
+            error_msg = f"{RED}Pre-optimization NOT SOLVED{RESET}" if is_pre_opt else f"{RED}NOT SOLVED{RESET}"
+            self.get_logger().error(error_msg)
 
-            self.optimized_speed = res.X
-            self.previous_solution_num_gen = total_gen
-            self.plot_speeds(problem, res.X)
 
-    def plot_speeds(self, problem, optimized_speed: list):
+    def optimize_speed(self,
+                    total_gen: int,
+                    previous_gen: int,
+                    previous_pop: np.ndarray | None = None):
 
-        cost = problem.speed_objective.cost_function_noise(np.array(optimized_speed).reshape(1, len(optimized_speed)))
+        # ----------------------------------------------------------------- #
+        #  0.   Book-keeping
+        # ----------------------------------------------------------------- #
+        remaining_segments = int(self.remaining_time / self.timestep)
+        extra_time         = self.remaining_time / self.timestep - remaining_segments
+        self.get_logger().info(f"Number of variables: {remaining_segments}")
 
-        time_vec = np.ones((1,int(self.remaining_time/self.timestep)))*self.timestep
+        # ================================================================= #
+        #  1.   (Optional) PRE-OPTIMISATION
+        # ================================================================= #
+        pre_solution_full = None                # to hold the seeding profile
+
+        if getattr(self, "pre_optimize", False) and previous_pop is None:
+            n_var_pre = int(self.remaining_time / (2*self.timestep))
+            extra_time_pre         = self.remaining_time / (2*self.timestep) - n_var_pre
+
+            self.get_logger().info(
+                f"⏩  Pre-optimisation enabled ({n_var_pre} vars, "
+                f"{self.pre_optimize_gens} generations)…"
+            )
+
+            # Create optimization setup for pre-optimization
+            problem_pre, pre_cb, pre_algorithm = self.create_speed_optimization_setup(
+                n_var = n_var_pre,
+                extra_time = extra_time_pre,
+                export_path = src_dir / 'ship' / 'case_studies' / self.case_study,
+                every_n_gen = 50,
+                initial_gen = 0,
+                timestep= self.timestep*2, # NOTE Here we multiply by two because the n_var is divided by 2
+                sampling = FloatRandomSampling()
+            )
+
+            # Run pre-optimization
+            res_pre = minimize(
+                problem_pre,
+                pre_algorithm,
+                termination = ('n_gen', self.pre_optimize_gens),
+                callback = pre_cb
+            )
+            self.get_logger().info(f"{YELLOW}Pre Optimization completed in {res_pre.exec_time:.2f} s{RESET}")
+
+            # Post-process pre-optimization results
+            self.post_process_results(res_pre, problem_pre, pre_cb, 
+                                    self.pre_optimize_gens, self.timestep*2, is_pre_opt=True) # NOTE Here we multiply by two because the n_var is divided by 2
+
+            # ----------------------------------------------------- #
+            #  Upscale/extend the shorter speed vector to full size
+            # ----------------------------------------------------- #
+            if res_pre.X is not None:
+                repeats = int(np.ceil(remaining_segments / n_var_pre))
+                pre_solution_full = np.tile(res_pre.X, repeats)[:remaining_segments]
+
+        # ================================================================= #
+        #  2.   MAIN OPTIMISATION
+        # ================================================================= #
+        # 2.1  Decide the GA sampling strategy
+        if previous_pop is not None:
+            self.get_logger().info("Initializing population from previous solution.")
+            assert previous_pop.shape[1] == remaining_segments, (
+                f"Mismatch between n_var={remaining_segments} "
+                f"and previous_pop.shape={previous_pop.shape}")
+            sampling = previous_pop
+
+        elif pre_solution_full is not None:
+            self.get_logger().info("Biased initialisation from pre-opt solution.")
+            sampling = self.make_biased_sampling(pre_solution_full,
+                                            pop_size = self.pop_size,
+                                            lb = self.min_v, ub = self.max_v)
+        else:
+            self.get_logger().info("Random initialisation.")
+            sampling = FloatRandomSampling()
+
+        # 2.2   Create optimization setup for main optimization
+        problem, main_cb, algorithm = self.create_speed_optimization_setup(
+            n_var = remaining_segments,
+            extra_time = extra_time,
+            export_path = src_dir / 'ship' / 'case_studies' / self.case_study,
+            every_n_gen = 200,
+            initial_gen = previous_gen,
+            timestep = self.timestep,
+            sampling = sampling
+        )
+
+        # NOTE This code is to identify the computation time of funcs
+        # problem.speed_objective.cost_function_noise          = timed(problem.speed_objective.cost_function_noise)
+        # problem.speed_objective.compute_ship_traj            = timed(problem.speed_objective.compute_ship_traj)
+        # problem.speed_objective.compute_mammal_traj          = timed(problem.speed_objective.compute_mammal_traj)
+        # problem.speed_objective.compute_tranmission_loss_single_freq = timed(problem.speed_objective.compute_tranmission_loss_single_freq)
+        # problem.speed_objective.compute_exposure_levels      = timed(problem.speed_objective.compute_exposure_levels)
+        # problem.speed_objective.compute_path_dist_vec        = timed(problem.speed_objective.compute_path_dist_vec)
+
+        # 2.4   Run main optimization
+        num_new_generations = total_gen - previous_gen
+        res = minimize(
+            problem,
+            algorithm,
+            termination = ('n_gen', num_new_generations),
+            callback = main_cb
+        )
+
+
+        # print_stats(min_pct=1.0)  # NOTE This code is to identify the computation time of funcs
+        self.get_logger().info(f"{YELLOW}Optimization completed in {res.exec_time:.2f} s{RESET}")
+
+        # ----------------------------------------------------------------- #
+        #  3.   Post-processing & plots
+        # ----------------------------------------------------------------- #
+        self.post_process_results(res, problem, main_cb, total_gen, self.timestep, is_pre_opt=False)
+
+
+
+    def plot_speeds(self, problem, optimized_speed: list, timestep : float,  filename : str = "optimized_speed_and_positions.png"):
+
+        cost = problem.speed_objective.cost_function_noise(np.array(optimized_speed).reshape(1, len(optimized_speed)), timestep)
+
+        time_vec = np.ones((1,int(self.remaining_time/timestep)))*timestep
         ship_vec = problem.speed_objective.compute_ship_traj(time_vec=time_vec,speed_profile= np.array(optimized_speed).reshape(1, len(optimized_speed))) 
-        mammal_poss = problem.speed_objective.compute_mammal_traj(time_vec=time_vec, mammal_states=self.mammal_current_states)
+        mammal_poss = problem.speed_objective.compute_mammal_traj(time_vec=time_vec, mammal_states=self.mammal_current_states, timestep = timestep)
 
-        time_axis = [(self.timestep * i + self.timestep / 2) for i in range(len(optimized_speed))]
+        time_axis = [(timestep * i + timestep / 2) for i in range(len(optimized_speed))]
 
         # Compute L_s_JE_decidecade
         L_s_JE_decidecade, f_decidecade = jomopans_model_matrix(self.freq, self.ship_type, np.array(optimized_speed).reshape(1, len(optimized_speed)), self.ship_length)
@@ -493,7 +669,6 @@ class SpeedOptimizer(Node):
         axs[2].grid(True, which='both', linestyle='--', linewidth=0.5)
 
         # Save the figure
-        filename = "optimized_speed_and_positions.png"
         plt.savefig(f"imgs/{filename}")
         plt.close()
 

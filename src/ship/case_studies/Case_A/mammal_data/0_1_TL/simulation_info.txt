@@ -1,2 +1,2 @@
 ETA: 741
-Simulation Time: 741.00 minutes
+Simulation Time: 0.00 minutes

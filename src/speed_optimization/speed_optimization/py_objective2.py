@@ -19,8 +19,9 @@ GEODESIC = Geod(ellps="WGS84")
 from noise_propagation_model.models.RBF.utils2 import RBFInterpolatorCustom
 
 class SpeedOptimizationObjective():
-        def __init__(self, timestep, waypoints: list[HelperPosition], mammal_states: list[State], shoreline_polygons: list[Polygon], freq: np.ndarray, ship_type: str, ship_length: float, n_var: int, min_v: float, max_v: float, TL_model_path: str):
-                self.timestep = timestep
+        def __init__(self, waypoints: list[HelperPosition], mammal_states: list[State], shoreline_polygons: list[Polygon], 
+                     freq: np.ndarray, ship_type: str, ship_length: float, n_var: int, min_v: float, max_v: float, TL_model_path: str,
+                     sample_step : int = 1):
                 self.waypoints = waypoints
                 self.mammal_states = mammal_states
                 self.path_dist_vec = self.compute_path_dist_vec(waypoints=waypoints)  # This numpy array has cumulative distances of consecutive waypoints
@@ -34,87 +35,145 @@ class SpeedOptimizationObjective():
                 self.max_v = max_v
                 self.TL_model = RBFInterpolatorCustom.import_model(TL_model_path)
                 self.th = audiogram_function(freq) # SRKW
+                self.sample_step = max(1, sample_step)   # k = 1  ⇒  original behaviour
 
 
+        def cost_function_noise(self, x: np.array, timestep: float):
+                """
+                x shape: (n_pop, n_var), timestep of x
+                Noise (TL & SL) is evaluated only every `sample_step` time indices
+                while trajectories remain full-resolution.
+                """
+                # ── 1.  Full-resolution Δt vector and trajectories ──────────────────
+                time_step_vec = np.ones_like(x) * timestep
+                ship_pos      = self.compute_ship_traj(time_step_vec, x)                # (pop, n_var, 2)
+                mammal_poss   = self.compute_mammal_traj(time_step_vec, self.mammal_states, timestep)  # (n_mammals, n_var, 2)
 
-        def cost_function_noise(self, x):
-                # Note: x is in knots and time is just repeated timesteps in hrs, not the time vector
-                time_step_vec = np.ones(x.shape) * self.timestep
+                # ── 2.  Pick only every k-th time-index for acoustics ───────────────
+                k   = self.sample_step
+                idx = np.arange(0, x.shape[1], k)                                       # indices to keep
 
-                ship_pos = self.compute_ship_traj(time_vec=time_step_vec, speed_profile=x)  # Shape: (num_gen, num_var, 2)
-                mammal_poss = self.compute_mammal_traj(time_vec=time_step_vec, mammal_states=self.mammal_states)  # Shape: (num_mammals, num_var, 2)
+                ship_sub   = ship_pos[:, idx]                                           # (pop, n_idx, 2)
+                mammal_sub = mammal_poss[:, idx]                                        # (n_mammals, n_idx, 2)
+                speed_sub  = x[:, idx]                                                  # (pop, n_idx)
 
-                L_s_JE_decidecade, f_decidecade = jomopans_model_matrix(self.freq, self.ship_type, x, self.ship_length)  # Shape: (num_gen, num_var, num_freq)
 
-                num_gen = ship_pos.shape[0]
-                num_var = ship_pos.shape[1]
-                num_mammals = mammal_poss.shape[0]
-                num_freq = L_s_JE_decidecade.shape[2]
+                # ── 3.  Source level for sampled steps ──────────────────────────────
+                SL, f_decidecade = jomopans_model_matrix(
+                        self.freq, self.ship_type, speed_sub, self.ship_length)             # (pop, n_idx, n_freq)
 
-                # Expand ship_pos to shape (num_gen, num_var, num_mammals, 2)
-                ship_pos_expanded = ship_pos[:, :, np.newaxis, :]  # Shape: (num_gen, num_var, 1, 2)
-                ship_pos_broadcasted = np.broadcast_to(ship_pos_expanded, (num_gen, num_var, num_mammals, 2))
+                # ── 4.  Transmission loss for sampled ship–mammal pairs ─────────────
+                pop, n_idx, n_mammals = ship_sub.shape[0], ship_sub.shape[1], mammal_sub.shape[0]
+                n_freq = SL.shape[2]
 
-                # Expand mammal_poss to shape (num_gen, num_var, num_mammals, 2)
-                # Transpose mammal_poss to align time steps
-                mammal_poss_transposed = np.transpose(mammal_poss, (1, 0, 2))  # Shape: (num_var, num_mammals, 2)
-                mammal_poss_expanded = mammal_poss_transposed[np.newaxis, :, :, :]  # Shape: (1, num_var, num_mammals, 2)
-                mammal_pos_broadcasted = np.broadcast_to(mammal_poss_expanded, (num_gen, num_var, num_mammals, 2))
+                ship_flat   = np.broadcast_to(ship_sub[:, :, None, :],
+                                                (pop, n_idx, n_mammals, 2)).reshape(-1, 2)
+                
+                mammal_sub_swapped = np.transpose(mammal_sub, (1, 0, 2))   # (n_idx, n_mammals, 2)
+                mammal_flat = np.broadcast_to(mammal_sub_swapped[None, ...],
+                                                (pop, n_idx, n_mammals, 2)).reshape(-1, 2)
 
-                # Reshape to (N, 2), where N = num_gen * num_var * num_mammals
-                ship_loc_flat = ship_pos_broadcasted.reshape(-1, 2)
-                mammal_loc_flat = mammal_pos_broadcasted.reshape(-1, 2)
+                TL_flat = self.compute_tranmission_loss_single_freq(mammal_flat, ship_flat)
+                TL      = TL_flat.reshape(pop, n_idx, n_mammals, n_freq).transpose(0,1,3,2)  # (pop,n_idx,freq,mammals)
 
-                # Compute TL_flat TODO Change simple to real TL
-                TL_flat = self.compute_tranmission_loss_single_freq(mammal_loc=mammal_loc_flat, ship_loc=ship_loc_flat)  # Output: (N, num_freq) 
+                # ── 5.  Noise level, peaks, SEL (Δt scaled by k) ────────────────────
+                NL  = np.clip(SL[..., None] - TL, 0, None)                              # (pop,n_idx,freq,mammals)
+                NLp = NL.max(axis=2)                                                    # (pop,n_idx,mammals)
 
-                # Reshape TL_flat to (num_gen, num_var, num_mammals, num_freq)
-                TL_matrix = TL_flat.reshape(num_gen, num_var, num_mammals, num_freq)
-                # Transpose to get shape (num_gen, num_var, num_freq, num_mammals)
-                TL_matrix = np.transpose(TL_matrix, (0, 1, 3, 2))
+                Delta_t_eff = timestep * k                                         # each sample covers k steps
+                SEL = self.compute_exposure_levels(NLp, Delta_t_eff)                    # (pop,mammals)
+
+                return SEL.mean(axis=1)   # (pop,)
+
+        # NOTE this is the old cost_func that doesnot have the truncation property. It computes the noise at every step of x
+        # def cost_function_noise(self, x):
+        #         # Note: x is in knots and time is just repeated timesteps in hrs, not the time vector
+        #         time_step_vec = np.ones(x.shape) * self.timestep
+
+        #         ship_pos = self.compute_ship_traj(time_vec=time_step_vec, speed_profile=x)  # Shape: (num_gen, num_var, 2)
+        #         mammal_poss = self.compute_mammal_traj(time_vec=time_step_vec, mammal_states=self.mammal_states)  # Shape: (num_mammals, num_var, 2)
+
+        #         L_s_JE_decidecade, f_decidecade = jomopans_model_matrix(self.freq, self.ship_type, x, self.ship_length)  # Shape: (num_gen, num_var, num_freq)
+
+        #         num_gen = ship_pos.shape[0]
+        #         num_var = ship_pos.shape[1]
+        #         num_mammals = mammal_poss.shape[0]
+        #         num_freq = L_s_JE_decidecade.shape[2]
+
+        #         # Expand ship_pos to shape (num_gen, num_var, num_mammals, 2)
+        #         ship_pos_expanded = ship_pos[:, :, np.newaxis, :]  # Shape: (num_gen, num_var, 1, 2)
+        #         ship_pos_broadcasted = np.broadcast_to(ship_pos_expanded, (num_gen, num_var, num_mammals, 2))
+
+        #         # Expand mammal_poss to shape (num_gen, num_var, num_mammals, 2)
+        #         # Transpose mammal_poss to align time steps
+        #         mammal_poss_transposed = np.transpose(mammal_poss, (1, 0, 2))  # Shape: (num_var, num_mammals, 2)
+        #         mammal_poss_expanded = mammal_poss_transposed[np.newaxis, :, :, :]  # Shape: (1, num_var, num_mammals, 2)
+        #         mammal_pos_broadcasted = np.broadcast_to(mammal_poss_expanded, (num_gen, num_var, num_mammals, 2))
+
+        #         # Reshape to (N, 2), where N = num_gen * num_var * num_mammals
+        #         ship_loc_flat = ship_pos_broadcasted.reshape(-1, 2)
+        #         mammal_loc_flat = mammal_pos_broadcasted.reshape(-1, 2)
+
+        #         TL_flat = self.compute_tranmission_loss_single_freq(mammal_loc=mammal_loc_flat, ship_loc=ship_loc_flat)  # Output: (N, num_freq) 
+
+        #         # Reshape TL_flat to (num_gen, num_var, num_mammals, num_freq)
+        #         TL_matrix = TL_flat.reshape(num_gen, num_var, num_mammals, num_freq)
+        #         # Transpose to get shape (num_gen, num_var, num_freq, num_mammals)
+        #         TL_matrix = np.transpose(TL_matrix, (0, 1, 3, 2))
 
         
 
-                # Expand SL_matrix to match dimensions
-                SL_matrix = L_s_JE_decidecade[:, :, :, np.newaxis]  # Shape: (num_gen, num_var, num_freq, 1)
-                SL_matrix = np.broadcast_to(SL_matrix, (num_gen, num_var, num_freq, num_mammals))
+        #         # Expand SL_matrix to match dimensions
+        #         SL_matrix = L_s_JE_decidecade[:, :, :, np.newaxis]  # Shape: (num_gen, num_var, num_freq, 1)
+        #         SL_matrix = np.broadcast_to(SL_matrix, (num_gen, num_var, num_freq, num_mammals))
 
-                # Compute NL_matrix
-                NL_matrix = SL_matrix - TL_matrix  # Shape: (num_gen, num_var, num_freq, num_mammals)
-                NL_matrix[NL_matrix < 0] = 0
+        #         # Compute NL_matrix
+        #         NL_matrix = SL_matrix - TL_matrix  # Shape: (num_gen, num_var, num_freq, num_mammals)
+        #         NL_matrix[NL_matrix < 0] = 0
 
 
-                NL_exceeding_th = NL_matrix
-                # NL_exceeding_th = NL_matrix - self.th[np.newaxis, np.newaxis, :, np.newaxis] # TODO Removed the thresold for testing
-                # NL_exceeding_th[NL_exceeding_th < 0] = 0 # TODO the test_obj has zero as obj cause NL never exceeds audiogram
+        #         NL_exceeding_th = NL_matrix
+        #         # NL_exceeding_th = NL_matrix - self.th[np.newaxis, np.newaxis, :, np.newaxis] # TODO Removed the thresold for testing
+        #         # NL_exceeding_th[NL_exceeding_th < 0] = 0 # TODO the test_obj has zero as obj cause NL never exceeds audiogram
 
-                # Integral:
-                # area = simps(NL_exceeding_th, x=f_decidecade, axis=2)  # Shape: (num_gen, num_var, num_mammals) TODO Removed the integral
+        #         # Integral:
+        #         # area = simps(NL_exceeding_th, x=f_decidecade, axis=2)  # Shape: (num_gen, num_var, num_mammals) TODO Removed the integral
 
-                # Peak SPL:
-                NL_peaks = np.max(NL_exceeding_th, axis=2)
+        #         # Peak SPL:
+        #         NL_peaks = np.max(NL_exceeding_th, axis=2)
 
-                # Sum over mammals TODO changed sum to mean
-                # area_summed = np.mean(NL_peaks, axis=2)  # Shape: (num_gen, num_var)
-                # cost = np.mean(area_summed, axis=1)  # Shape: (num_gen,)
+        #         # Sum over mammals TODO changed sum to mean
+        #         # area_summed = np.mean(NL_peaks, axis=2)  # Shape: (num_gen, num_var)
+        #         # cost = np.mean(area_summed, axis=1)  # Shape: (num_gen,)
 
-                # SEL:
-                SEL = self.compute_exposure_levels(NL_peaks) # Shape (num_gen, num_mammals)
-                cost = np.mean(SEL, axis=1) # Shape (num_gen, )
+        #         # SEL:
+        #         SEL = self.compute_exposure_levels(NL_peaks) # Shape (num_gen, num_mammals)
+        #         cost = np.mean(SEL, axis=1) # Shape (num_gen, )
 
-                return cost
+        #         return cost
         
         
         
-        def compute_exposure_levels(self,NL_matrix):
-                """ NL_matrix has shape (num_gen, num_var, num_mammals) and it exports SEL in dB ref uPa^2 h """
-                Delta_t = self.timestep # NOTE The timestep is in hr hence exposure level is in dB ref uPa^2 h 
+        # def compute_exposure_levels(self,NL_matrix):
+        #         """ NL_matrix has shape (num_gen, num_var, num_mammals) and it exports SEL in dB ref uPa^2 h """
+        #         Delta_t = self.timestep # NOTE The timestep is in hr hence exposure level is in dB ref uPa^2 h 
 
-                E_i = Delta_t * np.power(10, NL_matrix / 10)
-                E_total = np.sum(E_i, axis=1)  # Shape: (num_gen, num_mammals)
-                SEL_total = 10 * np.log10(E_total)
+        #         E_i = Delta_t * np.power(10, NL_matrix / 10)
+        #         E_total = np.sum(E_i, axis=1)  # Shape: (num_gen, num_mammals)
+        #         SEL_total = 10 * np.log10(E_total)
 
-                return SEL_total  # Shape: (num_gen, num_mammals)
+        #         return SEL_total  # Shape: (num_gen, num_mammals)
+
+        def compute_exposure_levels(self, NL_matrix, Delta_t):
+                """
+                NL_matrix shape: (pop, n_idx, n_mammals)
+                Delta_t: time represented by each NL value (hrs)
+                """
+
+                E_i      = Delta_t * np.power(10, NL_matrix / 10)
+                E_total  = E_i.sum(axis=1)                          # integrate over time
+                SEL_tot  = 10 * np.log10(E_total)
+                return SEL_tot                                      # (pop, n_mammals)
 
         def compute_simple_transmission_loss(self, mammal_loc, ship_loc):
                 """
@@ -283,13 +342,14 @@ class SpeedOptimizationObjective():
                 return ship_pos_vec
     
     
-        def compute_mammal_traj(self, time_vec, mammal_states: list[State]):
+        def compute_mammal_traj(self, time_vec, mammal_states: list[State], timestep: float):
                 """
                 Computes the trajectory for multiple mammals.
 
                 Args:
                 - time_vec: Time vector for simulation.
                 - mammal_states: List of initial states for each mammal.
+                - timestep (hrs)
 
                 Returns:
                 - mammal_pos_vec: 3D tensor of shape (num_mammals, num_var, 2) containing latitude and longitude.
@@ -300,7 +360,7 @@ class SpeedOptimizationObjective():
                 mammal_pos_vec = np.zeros((num_mammals, num_var, 2))
 
                 for j, mammal_state in enumerate(mammal_states):
-                        mammal_dist_vec = mammal_state.speed * np.ones(num_var) * self.timestep * 60
+                        mammal_dist_vec = mammal_state.speed * np.ones(num_var) * timestep * 60
                         mammal_dist_vec = np.reshape(mammal_dist_vec, (num_var, 1))  # Shape: (num_var, 1)
 
                         latitude_vec = np.zeros(mammal_dist_vec.shape[0])
@@ -327,4 +387,4 @@ class SpeedOptimizationObjective():
 
                 return mammal_pos_vec
         
-
+        

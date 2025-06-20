@@ -35,6 +35,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mammal_exe = mammals.py_mammal:main',
+            'mammal_manager = mammals.py_mammal_manager:main',
         ],
     },
 )

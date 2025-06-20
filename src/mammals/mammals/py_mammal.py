@@ -45,8 +45,14 @@ lon_max = bounds.max_lon
 lon_min = bounds.min_lon
 
 class Mammal(Node):
-    def __init__(self):
-        super().__init__('mammal_node')
+
+    def __init__(self, node_name, *, parameter_overrides=None, shared_assets=None):
+        super().__init__(node_name, parameter_overrides=parameter_overrides)
+        if shared_assets is None:
+            raise RuntimeError("Mammal expects shared_assets")
+        self.TL_model          = shared_assets.TL_MODEL
+        self.shoreline_polygons = shared_assets.SHORELINE_POLYGONS
+
         signal.signal(signal.SIGINT, self.handle_shutdown) # For clt + c shutdowns
         self.setup_logger()
         # Parameters
@@ -57,8 +63,7 @@ class Mammal(Node):
         self.declare_parameter('speed', 2.0)
         self.declare_parameter('topic', 'mammal_state')
         self.declare_parameter('bag_dir', '/workspaces/MUTE_v1/src/ship/case_studies/Case_1/mammal_data')
-        self.declare_parameter('TL_model_path', '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/RBF/model')
-        self.shoreline_polygons = []  # List of shapely polygons
+
         self.verbose_logging = False
         self.bag_exported = False
 
@@ -69,9 +74,6 @@ class Mammal(Node):
         speed = self.get_parameter('speed').get_parameter_value().double_value # m/s
         topic = self.get_parameter('topic').get_parameter_value().string_value
         self.bag_dir = self.get_parameter('bag_dir').get_parameter_value().string_value
-
-        self.TL_model_path = self.get_parameter('TL_model_path').get_parameter_value().string_value
-        self.TL_model = RBFInterpolatorCustom.import_model(self.TL_model_path)
 
 
         self.bag_dir = os.path.join(self.bag_dir, topic[1:4] + '_TL')
@@ -87,10 +89,6 @@ class Mammal(Node):
 
         self.get_logger().info(f"Parameters: latitude={latitude}, longitude={longitude}, depth={depth}, heading={heading}, speed={speed}")
 
-        # Getting the shoreline:
-        shoreline_paths = src_dir / "environment" / "shoreline_data"
-        shoreline = Polyshp(shoreline_paths)
-        self.shoreline_polygons = shoreline.get_polygons(lat_min, lat_max, lon_min, lon_max)
 
         # Subscribers:
         self.subscription_clock = self.create_subscription(
