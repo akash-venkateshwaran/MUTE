@@ -62,44 +62,11 @@ def get_bounds(node):
         node.get_logger().error(f"BoundsService call failed: {future.exception()}")
         return None
 
-def menu(case_dir: Path, kde_dir: Path, watch: TimeWatcher, bounds):
-    """
-    Interactive menu for mammal lifecycle operations using the
-    MammalInitializer and MammalManager classes.
-    """
-    mammal_manager = MammalManager(case_dir, kde_dir, watch, bounds)
-
-    while watch.behind_eta():
-        species = int(prompt_float("Species    :"))
-        mammal_manager.show_history(species=species)
-        print("""
-                1) Initialise mammal
-                2) Terminate mammal
-                q) Quit
-                """)
-        sel = input("> ").strip().lower()
-        
-        if sel == "1":
-            
-            mammal_manager.initialise()
-        elif sel == "2":
-
-            mammal_manager.terminate(species=species)
-        elif sel == "q":
-            break
-
-def kill_all_mammal_nodes():
-    subprocess.run('kill $(pgrep -f "mammal_exe")', shell=True)
-
 
 def main():
-     # --- single init
     rclpy.init()
-    # your time watcher node
     watch = TimeWatcher()
-    # create one bounds‐client node
     bounds_node = rclpy.create_node('bounds_service_client')
-    # executor for both
     executor = MultiThreadedExecutor()
     executor.add_node(watch)
     executor.add_node(bounds_node)
@@ -107,13 +74,17 @@ def main():
     spinner = threading.Thread(target=executor.spin, daemon=True)
     spinner.start()
 
-    # prompt for case and directories before spinning
-    src      = find_src_dir(Path(__file__))
-    base     = src / "mammals"
+    # Setup directories and bounds
+    src = find_src_dir(Path(__file__))
+    base = src / "mammals"
     case_dir = prompt_for_new_case(base)
-    kde_dir  = base / "kde_models"
+    kde_dir = base / "kde_models"
+    csv_path = os.path.join(
+            base,
+            "new_kde_models", 
+            "posterior_mean_map.csv"
+        )
 
-    # wait for clock & ETA
     try:
         print("Waiting for /clock & /ETA …")
         while rclpy.ok() and not watch.ready():
@@ -127,31 +98,68 @@ def main():
             print("Failed to get bounds, exiting.")
             return
 
-        print("Time topics ready – interactive session begins.")
+        # Setup paths and create mammal manager
+        TL_MODEL_PATH = str(src / 'noise_propagation_model' / 'noise_propagation_model'
+                           / 'models' / 'RBF' / 'model')
+        case_directory = case_dir.name
+        BAG_EXPORT_DIR = str(src / 'ship' / case_directory / 'mammal_data')
+        SHORELINE_PATH = str(src / 'environment' / 'shoreline_data')
+        bounds_dict = {
+            'lat_max': bounds.max_lat, 'lat_min': bounds.min_lat,
+            'lon_max': bounds.max_lon, 'lon_min': bounds.min_lon,
+        }
+
+        mammal_manager = MammalManager(
+            case_dir, kde_dir, watch, bounds,
+            TL_MODEL_PATH, BAG_EXPORT_DIR, SHORELINE_PATH, bounds_dict, executor, csv_path
+        )
+
+        print("Interactive session begins.")
+        
+        # Main loop
         while rclpy.ok() and watch.behind_eta():
-            menu(case_dir, kde_dir, watch, bounds)
-            time.sleep(0.2)
-        print(f"Interactive section completed. ETA: {watch.eta}, Sim time: {watch.simulation_time}")
+            # Update scheduler every cycle
+            mammal_manager.update()
+            
+            # Handle user input
+            species = int(prompt_float("Species: "))
+            mammal_manager.show_history(species=species)
+            print("""
+                1) Initialise mammal
+                2) Terminate mammal  
+                q) Quit
+                """)
+            sel = input("> ").strip().lower()
+
+            if sel == "1":
+                mammal_manager.initialise(species)
+            elif sel == "2":
+                mammal_manager.terminate(species)
+            elif sel == "q":
+                break
+                
+            time.sleep(0.1)  # Small delay to prevent busy loop
+
+        print(f"Session completed. ETA: {watch.eta}, Sim time: {watch.simulation_time}")
 
     except KeyboardInterrupt:
-        # fall through to finally
         pass
-
     except Exception as e:
         print(f"Error occurred: {e}")
     finally:
-        print("\n⏹  Shutting down ROS…")
+        print("\n⏹ Shutting down ROS…")
         try:
             executor.shutdown()
             watch.destroy_node()
             bounds_node.destroy_node()
             rclpy.shutdown()
         except Exception as e:
-            print(f"Shutdown error (can be ignored): {e}")
+            print(f"Shutdown error: {e}")
+        
+        print("🗑 Cleaning up processes…")
+        subprocess.run('kill $(pgrep -f "mammal_exe")', shell=True)
+        print("✔ All done.")
 
-        print("🗑  Cleaning up any stray mammal_exe processes…")
-        kill_all_mammal_nodes()
-        print("✔  All done.")
 
 if __name__ == "__main__":
     main()

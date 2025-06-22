@@ -12,9 +12,6 @@ import rclpy
 from custom_interfaces.srv import BoundsService
 import yaml
 from typing import Dict
-import sys
-import time
-import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -25,64 +22,54 @@ import subprocess
 import re
 import heapq, itertools
 from typing import Callable, Optional
+from mammals import shared_assets
+from rclpy.executors import MultiThreadedExecutor
 
-#################################################################
-############################ MUTE V1 ############################
+from rclpy.parameter import Parameter
+from mammals.py_mammal import Mammal
+import pandas as pd
 
 
-def validate_samples(samples, polygons, lat_min, lat_max, lon_min, lon_max):
-    """ Checks if the sample lies in water and has depth greater than zero"""
-    points = gpd.GeoDataFrame(geometry=gpd.points_from_xy(samples[:, 1], samples[:, 0]))
-    valid_points = points[(points.geometry.x >= lon_min) & 
-                          (points.geometry.x <= lon_max) & 
-                          (points.geometry.y >= lat_min) & 
-                          (points.geometry.y <= lat_max)]
-    for polygon in polygons:
-        valid_points = valid_points[~valid_points.within(polygon)]
-    valid_indices = valid_points.index
-    valid_indices = valid_indices[samples[valid_indices, 2] > 0]
-    return samples[valid_indices]
+class CSVMammalSampler:
+    """
+    Reads a CSV of mammal-location intensities and draws random samples
+    in proportion to those intensities.
 
-def plot_species_samples(species_samples, polygons, directory):
-    fig, ax = plt.subplots()
-    polygons.boundary.plot(ax=ax, color='black', linewidth=1, alpha=0.5)
-    for species, samples in species_samples.items():
-        depths = samples[:, 2]
-        scatter = ax.scatter(samples[:, 1], samples[:, 0], c=depths, cmap='Reds', label=f"Species {species}", s=10, alpha=0.8)
-    ax.set_xlabel('Longitude (degrees)')
-    ax.set_ylabel('Latitude (degrees)')
-    ax.set_title('Scatter Plot of Mammal Samples by Species with Shoreline Outline')
-    ax.legend()
-    ax.set_aspect('equal', adjustable='datalim')
-    plt.colorbar(scatter, ax=ax, label='Depth (m)')
-    plt.autoscale(enable=True, axis='both', tight=True)
-    filename = "Mammals_initial_loc.png"
-    plt.savefig(os.path.join(directory, filename))
-    plt.close()
+    On initialization:
+      - Loads the CSV and checks that the given month’s intensity column
+        (e.g. "May_intensity") is present.
+      - Extracts all (lat, lon) pairs.
+      - Normalizes the intensity values so they sum to 1 (or uses a uniform
+        distribution if all intensities are zero).
 
-def export_samples_to_yaml(species_samples: Dict[int, np.ndarray], directory_path: str) -> Dict[str, str]:
-    yaml_files = {}
-    for species_id, samples in species_samples.items():
-        for index, sample in enumerate(samples, start=1):
-            node_name = f'm{species_id}_{index}'
-            params = {
-                'latitude': float(sample[0]),
-                'longitude': float(sample[1]),
-                'depth': float(sample[2]),
-                'heading': float(sample[3]),
-                'speed': float(sample[4]),
-                'topic': f'{node_name}_state'
-            }
-            yaml_file_path = os.path.join(directory_path, f'{node_name}_params.yaml')
-            with open(yaml_file_path, 'w') as file:
-                yaml.dump({node_name: {'ros__parameters': params}}, file, default_flow_style=False)
-            yaml_files[node_name] = yaml_file_path
-    return yaml_files
+    The `sample(n)` method:
+      - Uses numpy.random.choice with the normalized intensities as probabilities
+        to select n indices (rows) from the data.
+      - Returns the corresponding (lat, lon) coordinates as an (n, 2) array.
+    """
+    def __init__(self, csv_path: str, month: str):
+        df = pd.read_csv(csv_path)
+        if month not in df.columns:
+            raise ValueError(f"'{month}' column not in CSV")
+        self.month = month
+        # extract lat/lon and probability
+        self.latlon = df[['lat', 'lon']].to_numpy()
+        prob = df[f"{month}_intensity"].values
+
+        prob = prob / prob.sum() if prob.sum() else np.full_like(prob, 1/len(prob))
+        self.prob = prob
+
+    def sample(self, n: int) -> np.ndarray:
+        idx = np.random.choice(len(self.prob), size=n, p=self.prob)
+        return self.latlon[idx]
 
 
 
 #################################################################
 ############################ MUTE V2 ############################
+
+
+
 
 
 def prompt_float(label: str) -> float:
@@ -123,9 +110,6 @@ def prompt_for_new_case(base_dir: Path) -> Path:
         print(f"Created case directory: {case_dir}")
         return case_dir
 
-
-
-
 class TimeWatcher(Node):
     """Keeps track of simulation time (/clock) and ETA (/ETA), both in mins."""
 
@@ -134,38 +118,15 @@ class TimeWatcher(Node):
         self.simulation_time: Optional[int] = None
         self.eta: Optional[int] = None
 
-        self._triggers: list[tuple[int, int, Callable[[], None]]] = []  # min-heap
-        self._seq = itertools.count()                                   # tie-breaker
-
         self.create_subscription(Clock, "/clock", self.clock_cb, 10)
         self.create_subscription(Clock, "/ETA",   self.eta_cb,   10)
 
-    # ─────────── trigger support ────────────────────────────────────────
-    def add_trigger(self, t: int, callback: Callable[[], None]) -> None:
-        """
-        Schedule *callback* to fire once when /clock >= ``t`` (seconds).
-        Fires immediately if that time is already past.
-        """
-        if self.simulation_time is not None and self.simulation_time >= t:
-            callback()
-        else:
-            heapq.heappush(self._triggers, (t, next(self._seq), callback))
-
-    # ─────────── ROS callbacks ──────────────────────────────────────────
     def clock_cb(self, msg: Clock):
         self.simulation_time = msg.clock.sec
-        # dispatch any triggers that are now due
-        while self._triggers and self._triggers[0][0] <= self.simulation_time:
-            _, _, cb = heapq.heappop(self._triggers)
-            try:
-                cb()
-            except Exception as exc:
-                self.get_logger().error(f"Trigger callback failed: {exc}")
 
     def eta_cb(self, msg: Clock):
         self.eta = msg.clock.sec
 
-    # convenience
     def ready(self) -> bool:
         return self.simulation_time is not None and self.eta is not None
 
@@ -174,78 +135,252 @@ class TimeWatcher(Node):
         return self.simulation_time < self.eta
 
 
+class MammalScheduler:
+    """
+    Simple scheduler for mammal nodes - no complex triggering system needed.
+    Just checks scheduled times on each update cycle.
+    """
+    
+    def __init__(self, executor: MultiThreadedExecutor):
+        self.executor = executor
+        self.scheduled_mammals: dict[str, dict] = {}  # {node_name: {start_time, end_time, node_obj, ...}}
+        self.active_mammals: dict[str, rclpy.node.Node] = {}
+        
+    def schedule_mammal(self, node_name: str, start_time: int, end_time: int, 
+                       mammal_config: dict):
+        """Schedule a mammal to start and end at specific times."""
+        self.scheduled_mammals[node_name] = {
+            'start_time': start_time,
+            'end_time': end_time,
+            'config': mammal_config,
+            'node_obj': None,
+            'started': False,
+            'terminated': False
+        }
+        
+    def update(self, current_time: int):
+        """Check and update mammal lifecycle based on current simulation time."""
+        for node_name, info in self.scheduled_mammals.items():
+            # Start mammals that should be running
+            if (current_time >= info['start_time'] and 
+                not info['started'] and 
+                not info['terminated']):
+                self._start_mammal(node_name, info)
+                
+            # Terminate mammals that should be stopped
+            if (current_time >= info['end_time'] and 
+                info['started'] and 
+                not info['terminated']):
+                self._terminate_mammal(node_name, info)
+    
+    def _start_mammal(self, node_name: str, info: dict):
+        """Actually create and start the mammal node."""
+        try:
+            # Create the mammal node with config
+            node = Mammal(
+                node_name=node_name,
+                parameter_overrides=info['config']['parameters'],
+                shared_assets=info['config']['shared_assets'],
+            )
+            
+            self.executor.add_node(node)
+            self.active_mammals[node_name] = node
+            info['node_obj'] = node
+            info['started'] = True
+            
+            print(f"🚀 {node_name} started at t={info['start_time']} min")
+            
+        except Exception as e:
+            print(f"❌ Failed to start {node_name}: {e}")
+    
+    def _terminate_mammal(self, node_name: str, info: dict):
+        """Actually terminate the mammal node."""
+        try:
+            if node_name in self.active_mammals:
+                node = self.active_mammals.pop(node_name)
+                self.executor.remove_node(node)
+                node.destroy_node()
+                info['terminated'] = True
+                
+                print(f"✔ {node_name} terminated at t={info['end_time']} min")
+                
+        except Exception as e:
+            print(f"❌ Failed to terminate {node_name}: {e}")
+    
+    def get_active_mammals(self, species: int = None) -> list[str]:
+        """Get list of currently active mammal names, optionally filtered by species."""
+        active = []
+        for name, info in self.scheduled_mammals.items():
+            if info['started'] and not info['terminated']:
+                if species is None or name.startswith(f"m{species}_"):
+                    active.append(name)
+        return active
+    
+    def force_terminate(self, node_name: str, current_time: int):
+        """Immediately terminate a specific mammal (user-requested)."""
+        if node_name in self.scheduled_mammals:
+            info = self.scheduled_mammals[node_name]
+            info['end_time'] = current_time  # Update end time
+            self._terminate_mammal(node_name, info)
 
+            
 
 class MammalManager:
-    """
-    Interactively create / terminate mammal nodes for a case-study run.
+    """Simplified mammal manager with CSV sampling instead of KDE models."""
 
-    • initialise()  -> schedules a launch of the mammal node
-    • terminate()   -> stops a running mammal node and stamps end_clock
-    """
-
-    def __init__(self, case_dir: Path, kde_dir: Path,
-                 watcher: TimeWatcher, bounds, TL_model_path = '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/RBF/model'):
+    def __init__(
+        self,
+        case_dir: Path,
+        kde_dir: Path,  # Now used for CSV models directory
+        watcher: TimeWatcher,
+        bounds,
+        tl_model_path: str,
+        bag_dir: str,
+        shoreline_path: str,
+        bounds_dict: dict,
+        executor: MultiThreadedExecutor,
+        csv_path : Path,
+        month: str = "May"  # Add month parameter for CSV sampling
+    ):
         self.case_dir = case_dir
-        self.kde_dir = kde_dir
-        self.watcher = watcher          # gives .simulation_time  &  .eta
-        self.bounds = bounds            # dataclass with min/max lat & lon
+        self.kde_dir = kde_dir  # Now points to new_kde_models directory
+        self.bag_dir = bag_dir
+        self.TL_model_path = tl_model_path
+        self.watcher = watcher
+        self.bounds = bounds
+        self.month = month
+        
+        # Simple scheduler instead of complex triggering
+        self.scheduler = MammalScheduler(executor)
+        
+        # Initialize shared assets once
+        shared_assets.init_shared(tl_model_path, shoreline_path, bounds_dict)
+        self.shoreline_polygons = shared_assets.SHORELINE_POLYGONS
+
+        # Keep track of history for naming
         self.history: dict[int, dict[str, dict[str, int | None]]] = {}
-        self.TL_model_path = TL_model_path
-        self.bag_dir = str(self.case_dir)
-        self._processes: dict[str, subprocess.Popen] = {} # To keep track of the mammal node execution for killing
+        
+        # Initialize CSV sampler
+        self.csv_sampler = self._initialize_csv_sampler(csv_path=csv_path)
 
-        try:
-            self.src_dir = next(p for p in case_dir.parents if p.name == "src")
-        except StopIteration:
-            raise RuntimeError("Could not locate the enclosing <workspace>/src folder")
+    def _initialize_csv_sampler(self, csv_path) -> CSVMammalSampler:
+        """Initialize the CSV sampler for mammal population sampling."""
+            
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV file not found at {csv_path}")
+            
+        return CSVMammalSampler(csv_path, self.month)
 
-        # shoreline polygons for land-/water tests
-        shoreline_paths = self.src_dir / "environment" / "shoreline_data"
-        shoreline = Polyshp(shoreline_paths)
-        self.shoreline_polygons = shoreline.get_polygons(
-            self.bounds.min_lat, self.bounds.max_lat,
-            self.bounds.min_lon, self.bounds.max_lon,
-        )
-
-    def next_node_name(self,species: int) -> str:
-        """
-        Return the next unique mammal label *using in-memory history* rather than
-        the filesystem.  Pattern remains ``m<species>_<idx>``.
-        """
+    def next_node_name(self, species: int) -> str:
+        """Generate next unique mammal name."""
         records = self.history.get(species, {})
-        if not records:                                # first mammal of this species
+        if not records:
             return f"m{species}_1"
 
-        # pull numeric suffixes already used → find the next integer
         used = []
-        for name in records.keys():                    # e.g. "m3_2"
+        for name in records.keys():
             try:
                 used.append(int(name.split("_")[1]))
             except (IndexError, ValueError):
-                continue                               # skip malformed
+                continue
 
         next_idx = (max(used) if used else 0) + 1
         return f"m{species}_{next_idx}"
 
-    def load_kde_models(self, kde_dir: Path, species: int = 0):
-        pop_file = kde_dir / "population_data" / f"kde_model_species_{species}.pickle"
-        dep_file = kde_dir / "depth_data" / f"kde_model_species_{species}.pickle"
-        if not (pop_file.exists() and dep_file.exists()):
-            raise FileNotFoundError(f"Missing KDE models for species {species}")
-        with open(pop_file, "rb") as f:
-            kde_pop = pickle.load(f)
+    def load_kde_depth_model(self, species: int = 0):
+        """Load only the depth KDE model for species (population now uses CSV)."""
+        dep_file = self.kde_dir / "depth_data" / f"kde_model_species_{species}.pickle"
+        if not dep_file.exists():
+            raise FileNotFoundError(f"Missing depth KDE model for species {species}: {dep_file}")
+        
+        import pickle
         with open(dep_file, "rb") as f:
             kde_dep = pickle.load(f)
-        return kde_pop, kde_dep
+        return kde_dep
 
-    def sample_from_kde(self, kde_pop, kde_dep) -> Tuple[float, float, float]:
-        loc = kde_pop.sample(1).reshape(-1)
-        loc[0:2] = np.degrees(loc[0:2])          # rad → deg
+    def sample_from_csv_and_kde(self, species: int) -> Tuple[float, float, float]:
+        """Sample location from CSV and depth from KDE model."""
+        # Sample location from CSV
+        location_sample = self.csv_sampler.sample(1)[0]  # Get first (and only) sample
+        lat, lon = float(location_sample[0]), float(location_sample[1])
+        
+        # Sample depth from KDE
+        kde_dep = self.load_kde_depth_model(species)
         depth = float(kde_dep.sample(1))
-        return float(loc[0]), float(loc[1]), depth
+        
+        return lat, lon, depth
+
+    def batch_sample_mammals(self, species: int, count: int) -> np.ndarray:
+        """
+        Batch sample mammals using CSV for population and KDE for depth.
+        Returns array of shape (count, 5) with columns: lat, lon, depth, heading, speed
+        """
+        # Load depth KDE model
+        kde_dep = self.load_kde_depth_model(species)
+        
+        valid_samples = np.empty((0, 5))  # (lat lon depth heading speed)
+        
+        print(f"Sampling mammals of species {species}, {valid_samples.shape[0]}/{count}")
+        
+        while valid_samples.shape[0] < count:
+            needed = count - valid_samples.shape[0]
+            
+            # Sample population locations from CSV
+            samples_pop = self.csv_sampler.sample(needed)
+            
+            # Sample depths from KDE
+            samples_dep = kde_dep.sample(needed).reshape(-1, 1)
+            
+            # Generate random headings and speeds
+            headings = np.random.uniform(-180, 180, size=(needed, 1))
+            speeds = np.random.uniform(1, 4, size=(needed, 1))  # 1–4 m/s speeds
+            
+            # Combine all samples
+            samples = np.hstack((samples_pop, samples_dep, headings, speeds))
+            
+            # Validate samples (assuming you have this function)
+            try:
+                valid_samples_batch = self.validate_samples(
+                    samples, 
+                    self.shoreline_polygons, 
+                    self.bounds.min_lat, 
+                    self.bounds.max_lat, 
+                    self.bounds.min_lon, 
+                    self.bounds.max_lon
+                )
+                valid_samples = np.vstack([valid_samples, valid_samples_batch])
+            except AttributeError:
+                # If validate_samples doesn't exist, just check bounds and land
+                valid_batch = []
+                for sample in samples:
+                    lat, lon = sample[0], sample[1]
+                    if (self.bounds.min_lat <= lat <= self.bounds.max_lat and
+                        self.bounds.min_lon <= lon <= self.bounds.max_lon and
+                        not self.is_on_land(lat, lon)):
+                        valid_batch.append(sample)
+                
+                if valid_batch:
+                    valid_samples = np.vstack([valid_samples, np.array(valid_batch)])
+                    
+        return valid_samples[:count, :]
+
+    def validate_samples(self, samples, polygons, lat_min, lat_max, lon_min, lon_max):
+        """
+        Validate samples to ensure they're in water and within bounds.
+        This is a placeholder - implement according to your existing validation logic.
+        """
+        valid_samples = []
+        for sample in samples:
+            lat, lon = sample[0], sample[1]
+            if (lat_min <= lat <= lat_max and 
+                lon_min <= lon <= lon_max and 
+                not self.is_on_land(lat, lon)):
+                valid_samples.append(sample)
+        return np.array(valid_samples) if valid_samples else np.empty((0, 5))
 
     def is_on_land(self, lat: float, lon: float) -> bool:
+        """Check if coordinates are on land."""
+        from shapely.geometry import Point, Polygon, MultiPolygon
         point = Point(lon, lat)
         for geom in self.shoreline_polygons:
             if isinstance(geom, MultiPolygon):
@@ -255,8 +390,8 @@ class MammalManager:
                 return True
         return False
 
-    def prompt_float_in_range(self, prompt: str,
-                              min_val: float, max_val: float) -> float:
+    def prompt_float_in_range(self, prompt: str, min_val: float, max_val: float) -> float:
+        """Prompt user for float value within range."""
         while True:
             val = prompt_float(prompt)
             if min_val <= val <= max_val:
@@ -264,208 +399,139 @@ class MammalManager:
             print(f"Error: value must be between {min_val} and {max_val}")
 
     def get_valid_location(self) -> Tuple[float, float]:
+        """Get valid water location from user."""
         while True:
-            lat = self.prompt_float_in_range("Latitude",
-                                             self.bounds.min_lat, self.bounds.max_lat)
-            lon = self.prompt_float_in_range("Longitude",
-                                             self.bounds.min_lon, self.bounds.max_lon)
+            lat = self.prompt_float_in_range("Latitude", self.bounds.min_lat, self.bounds.max_lat)
+            lon = self.prompt_float_in_range("Longitude", self.bounds.min_lon, self.bounds.max_lon)
             if self.is_on_land(lat, lon):
                 print("Error: location is on land – choose water.")
                 continue
             return lat, lon
-    
-    def show_history(self,species: int):
-        # >>> show existing history for this species
+
+    def show_history(self, species: int):
+        """Show history for a species."""
         if species in self.history and self.history[species]:
-            print("\n⚑ Previous mammals for species", species)
+            print(f"\n⚑ Previous mammals for species {species}")
             for n, rec in self.history[species].items():
-                print(f"  • {n}: start={rec['start']}  end={rec['end']}")
+                status = "Active" if rec['end'] is None else "Terminated"
+                print(f"  • {n}: start={rec['start']} end={rec['end']} ({status})")
             print()
 
-    # ─────────────────────────────────────────────────────────────────────
-    # MAIN: create a new mammal node (+ deferred launch)
-    # ─────────────────────────────────────────────────────────────────────
     def initialise(self, species: int = 0):
-        """
-        • Ask user for species id, location/sampling choice, start_clock, etc.  
-        • Schedule python-launch once watcher.simulation_time == start_clock
-        """
-
-        # -- location / depth / heading / speed
-        if input("Sample from KDE models? (y/n): ").strip().lower() == "y":
-            kde_pop, kde_dep = self.load_kde_models(self.kde_dir, species)
-            lat, lon, depth = self.sample_from_kde(kde_pop, kde_dep)
+        """Create and schedule a new mammal."""
+        # Get mammal parameters
+        if input("Sample from CSV/KDE models? (y/n): ").strip().lower() == "y":
+            lat, lon, depth = self.sample_from_csv_and_kde(species)
             heading = np.random.uniform(-180, 180)
             speed = np.random.uniform(1, 4)
-            start_clock = int(self.prompt_float_in_range("Start-clock (min)",  self.watcher.simulation_time, self.watcher.eta))
-            print(f"Sampled:  lat={lat:.4f}  lon={lon:.4f}  depth={depth:.1f}  "
-                  f"heading={heading:.1f}  speed={speed:.1f}")
+            print(f"Sampled: lat={lat:.4f} lon={lon:.4f} depth={depth:.1f} "
+                f"heading={heading:.1f} speed={speed:.1f}")
         else:
             lat, lon = self.get_valid_location()
-            depth   = self.prompt_float_in_range("Depth (m)",     0, 10)
+            depth = self.prompt_float_in_range("Depth (m)", 0, 10)
             heading = self.prompt_float_in_range("Heading (deg)", -180, 180)
-            speed   = self.prompt_float_in_range("Speed (m/s)",   0.0, 5.0)
-            start_clock = int(self.prompt_float_in_range("Start-clock (min)",  self.watcher.simulation_time, self.watcher.eta))
+            speed = self.prompt_float_in_range("Speed (m/s)", 0.0, 5.0)
 
-        # -- naming & topic
+        start_clock = int(self.prompt_float_in_range(
+            "Start-clock (min)", self.watcher.simulation_time, self.watcher.eta))
+        end_clock = int(self.prompt_float_in_range(
+            "End-clock (min)", start_clock, self.watcher.eta))
+
+        # Generate name and create config
         node_name = self.next_node_name(species)
-        topic     = f"{node_name}_state"
+        topic = f"{node_name}_state"
+        
+        # Store in history
         self.history.setdefault(species, {})[node_name] = {
             "start": start_clock,
-            "end":   None,
+            "end": end_clock,
         }
 
-        # -- schedule a launch when the clock reaches `start_clock`
-        def _deferred_launch():
-            cmd = [
-                "ros2", "run", "mammals", "mammal_exe",
-                "--ros-args",
-                "-r", f"__node:={node_name}",
-                # ─── all parameters inline ───────────────────────────
-                "-p", f"latitude:={lat}",
-                "-p", f"longitude:={lon}",
-                "-p", f"depth:={depth}",
-                "-p", f"heading:={heading}",
-                "-p", f"speed:={speed}",
-                "-p", f"topic:={topic}",
-                "-p", f"bag_dir:={self.bag_dir}",
-                "-p", f"case_dir:={self.case_dir}",
-                "-p", f"TL_model_path:={self.TL_model_path}",
-            ]
-            print(f"🚀  Launching {node_name} at t={self.watcher.simulation_time} min …")
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                preexec_fn=os.setsid     # <<< start a new session (=process group)
-            )
-            self._processes[node_name] = proc
+        # Export YAML configuration
+        self.export_mammal_yaml(node_name, lat, lon, depth, heading, speed, topic, start_clock, end_clock)
 
-        # register with watcher
-        self.watcher.add_trigger(start_clock, _deferred_launch)
-        print(f"🕒  Node will launch when /clock == {start_clock} min")
+        # Create mammal config for scheduler
+        from rclpy.parameter import Parameter
+        mammal_config = {
+            'parameters': [
+                Parameter('latitude', value=lat),
+                Parameter('longitude', value=lon),
+                Parameter('depth', value=depth),
+                Parameter('heading', value=heading),
+                Parameter('speed', value=speed),
+                Parameter('topic', value=topic),
+                Parameter('bag_dir', value=self.bag_dir),
+                Parameter('case_dir', value=str(self.case_dir)),
+            ],
+            'shared_assets': shared_assets
+        }
 
-    def list_active(self) -> list[str]:
-        # If you want “active” = still-running OS processes:
-        return [name for name, proc in self._processes.items()
-                if proc.poll() is None]
-
-    # def terminate(self, species: int = 0):
-        
-        # active = self.list_active()
-        # if not active:
-        #     print("No active mammals found.")
-        #     return
-
-        # print("\nActive mammals:")
-        # for idx, name in enumerate(active, 1):
-        #     print(f"  {idx}. {name}")
-
-        # # -- choose which to terminate
-        # choice = int(self.prompt_float_in_range("Choice", 1, len(active)))
-        # chosen = active[int(choice) - 1]
-
-        # # -- stamp end_clock in YAML
-        # yaml_path = self.case_dir / f"{chosen}_params.yaml"
-        # if yaml_path.exists():
-        #     with yaml_path.open() as f:
-        #         data = yaml.safe_load(f)
-        #     data["sim_parameters"]["end_clock"] = self.watcher.simulation_time
-        #     with yaml_path.open("w") as f:
-        #         yaml.safe_dump(data, f, sort_keys=False)
-        #     print(f"✔  Patched end_clock={self.watcher.simulation_time} in {yaml_path.name}")
-
-        # # -- politely ask ROS2 to kill the node
-        # proc = self._processes.pop(chosen)
-        # print(f"🚨  Terminating node {chosen} …")
-        # pgid = os.getpgid(proc.pid)            # process-group id
-        # os.killpg(pgid, signal.SIGINT)         # polite shutdown (rclpy catches SIGINT)
-
-        # try:
-        #     proc.wait(timeout=5)
-        #     print("✔  Node exited cleanly.")
-        # except subprocess.TimeoutExpired:
-        #     print("⚠️  Still alive after SIGINT → sending SIGTERM …")
-        #     os.killpg(pgid, signal.SIGTERM)
-        #     try:
-        #         proc.wait(timeout=3)
-        #     except subprocess.TimeoutExpired:
-        #         print("💥  Forcing SIGKILL.")
-        #         os.killpg(pgid, signal.SIGKILL)
-        #         proc.wait()
-
-    def prompt_valid_idx(self, active_mammals: list[tuple[int, str]]) -> int:
-        """Prompt user to select a valid mammal index from the list."""
-        valid_indices = {idx for idx, _ in active_mammals}
-        while True:
-            for idx, name in active_mammals:
-                print(f"  {idx}. {name}")
-            selection = int(prompt_float("Select mammal idx from the list to terminate"))
-            if selection in valid_indices:
-                return selection
-            else:
-                print("Invalid selection. Please choose a valid index from the list.")
+        # Schedule with the simple scheduler
+        self.scheduler.schedule_mammal(node_name, start_clock, end_clock, mammal_config)
+        print(f"🕒 {node_name} scheduled: start={start_clock} end={end_clock} min")
 
     def terminate(self, species: int = 0):
-        """
-        • Ask user which mammal to terminate
-        • Get end_clock from user
-        • Schedule termination when watcher.simulation_time == end_clock
-        """
-        # Get species history
-        species_history = self.history.get(species, {})
-        
-        if not species_history:
-            print(f"No mammals for species {species} found.")
-            return
-        
-        # Get active mammals (ones with no end time)
-        active_mammals = [(i+1, name) for i, (name, info) in 
-                        enumerate(species_history.items()) if info["end"] is None]
+        """Immediately terminate an active mammal."""
+        active_mammals = self.scheduler.get_active_mammals(species)
         
         if not active_mammals:
             print(f"No active mammals for species {species}.")
             return
-        
-        
-        # Get user selection according to order of history
-        selection = self.prompt_valid_idx(active_mammals)
-        chosen_idx = selection - 1
-        chosen = active_mammals[chosen_idx][1]
-        
-        # Get end_clock from user
-        end_clock = int(self.prompt_float_in_range(
-            f"End-clock for {chosen} (min)",
-            self.watcher.simulation_time,
-            self.watcher.eta
-        ))
-        
-        # Update history with end time
-        species_history[chosen]["end"] = end_clock
-        
-        # Schedule termination with the TimeWatcher
-        def _deferred_termination():
-            # Make sure the process is still in our dict (safety check)
-            if chosen in self._processes:
-                # -- politely ask ROS2 to kill the node
-                proc = self._processes.pop(chosen)
-                print(f"🚨  Terminating node {chosen} at t={self.watcher.simulation_time} min …")
-                pgid = os.getpgid(proc.pid)            # process-group id
-                os.killpg(pgid, signal.SIGINT)         # polite shutdown (rclpy catches SIGINT)
 
-                try:
-                    proc.wait(timeout=5)
-                    print("✔  Node exited cleanly.")
-                except subprocess.TimeoutExpired:
-                    print("⚠️  Still alive after SIGINT → sending SIGTERM …")
-                    os.killpg(pgid, signal.SIGTERM)
-                    try:
-                        proc.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        print("💥  Forcing SIGKILL.")
-                        os.killpg(pgid, signal.SIGKILL)
-                        proc.wait()
+        print("Active mammals:")
+        for i, name in enumerate(active_mammals, 1):
+            print(f"  {i}. {name}")
+
+        while True:
+            try:
+                selection = int(input("Select mammal to terminate (number): ")) - 1
+                if 0 <= selection < len(active_mammals):
+                    chosen = active_mammals[selection]
+                    break
+                else:
+                    print("Invalid selection.")
+            except ValueError:
+                print("Please enter a number.")
+
+        # Terminate immediately
+        self.scheduler.force_terminate(chosen, self.watcher.simulation_time)
         
-        # Register the termination trigger with the watcher
-        self.watcher.add_trigger(end_clock, _deferred_termination)
-        print(f"🕒  Node {chosen} will be terminated when /clock == {end_clock} min")
+        # Update history
+        for species_records in self.history.values():
+            if chosen in species_records:
+                species_records[chosen]['end'] = self.watcher.simulation_time
+                break
+
+        print(f"✔ {chosen} terminated immediately")
+
+    def export_mammal_yaml(self, node_name: str, lat: float, lon: float, depth: float, 
+                      heading: float, speed: float, topic: str, start_clock: int, end_clock: int):
+        """Export mammal configuration to YAML file."""
+        import yaml
+        config = {
+            node_name: {
+                'ros__parameters': {
+                    'depth': depth,
+                    'heading': heading,
+                    'latitude': lat,
+                    'longitude': lon,
+                    'speed': speed,
+                    'topic': topic
+                },
+                'simulation__parameters': {
+                    'start_min': start_clock,
+                    'end_min': end_clock
+                }
+            }
+        }
+        
+        yaml_file = self.case_dir / f"{node_name}.yaml"
+        with open(yaml_file, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, indent=2)
+        
+        print(f"📄 Exported {yaml_file}")
+
+    def update(self):
+        """Update the scheduler - call this regularly."""
+        if self.watcher.simulation_time is not None:
+            self.scheduler.update(self.watcher.simulation_time)
