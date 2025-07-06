@@ -68,15 +68,15 @@ class SpeedOptimizer(Node):
     def __init__(self):
         super().__init__('speed_optimizer_node')
         self.waypoints = [] # List of HelperPositions
-        self.case_study = 'Case_1'
+        self.case_study = 'Case_3'
         self.skip_process = None
         self.TL_model_path = str(src_dir / 'noise_propagation_model' / 'noise_propagation_model' / 'models' / 'RBF' / 'model_single_freq')
-        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_1' / 'optimal_population_1800.csv')
-        self.acc_max = 36.60 # knots/h
-        self.acc_min = -33.00 # knots/h
+        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_3' / 'optimal_population_1800.csv')
+        self.acc_max = 10000.00 # knots/h
+        self.acc_min = -10000.60 # knots/h
 
 
-        self.timestep = (3/60) # hrs (usually 0.15)
+        self.timestep = (9/60) # hrs (usually 0.15)
         self.obj_computation_step = 1 # NOTE This is the step number at which TL and SL is calclated wrt the ship/mammal traj. Default is 1 means at every step of traj, the TL is calculated
         self.ETA = None  # hrs
         self.simulation_time = 0.0  # hrs

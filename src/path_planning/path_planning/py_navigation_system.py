@@ -46,8 +46,8 @@ class NavigateSystem(Node):
         super().__init__('navigate_system')
         self.setup_logger()
 
-        self.case_study = base_directory / 'path_planning' / 'case_studies' / 'Case_1' / 'case_study.csv'
-        self.export_path = base_directory / 'ship' / 'case_studies' / 'Case_1' # NOTE Make sure both the path's case number matches
+        self.case_study = base_directory / 'path_planning' / 'case_studies' / 'Case_3' / 'case_study.csv'
+        self.export_path = base_directory / 'ship' / 'case_studies' / 'Case_3' # NOTE Make sure both the path's case number matches
         self.TL_model_path = base_directory / 'noise_propagation_model' / 'noise_propagation_model' / 'models' / 'RBF' / 'model'
 
         self.verbose_logging = False
