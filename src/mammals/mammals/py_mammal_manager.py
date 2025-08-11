@@ -94,19 +94,40 @@ class MammalManager(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    manager = MammalManager()
-    exec = MultiThreadedExecutor()
-    exec.add_node(manager)
-    for m in manager._mammal_nodes:
-        exec.add_node(m)
-
+    manager = None
+    
     try:
-        exec.spin()
-    finally:
+        manager = MammalManager()
+        exec = MultiThreadedExecutor()
+        exec.add_node(manager)
         for m in manager._mammal_nodes:
-            m.destroy_node()
-        manager.destroy_node()
-        rclpy.shutdown()
+            exec.add_node(m)
+
+        exec.spin()
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully
+        pass
+    finally:
+        # Clean up nodes first
+        if manager is not None:
+            for m in manager._mammal_nodes:
+                try:
+                    m.destroy_node()
+                except Exception as e:
+                    print(f"Error destroying mammal node: {e}")
+            
+            try:
+                manager.destroy_node()
+            except Exception as e:
+                print(f"Error destroying manager node: {e}")
+        
+        # Only shutdown if context is still valid
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+            pass
 
 if __name__ == '__main__':
     main()

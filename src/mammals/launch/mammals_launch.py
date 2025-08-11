@@ -56,8 +56,20 @@ if os.path.exists(case_directory_path) and os.listdir(case_directory_path):
             print("Invalid input. Please enter 'y' or 'n'.")
 
 
+
 if os.path.exists(BAG_EXPORT_DIR):
-     print(f"The directory {BAG_EXPORT_DIR} already exists for bag files. Do you want to delete it? (y/n): ")
+    while True:
+        permission = input(f"The directory {BAG_EXPORT_DIR} already exists for bag files. Do you want to delete it? (y/n): ")
+        if permission.lower() == 'y':
+            shutil.rmtree(BAG_EXPORT_DIR)
+            os.makedirs(BAG_EXPORT_DIR)
+            print(f"Cleared and recreated directory: {BAG_EXPORT_DIR}")
+            break
+        elif permission.lower() == 'n':
+            print("Directory not cleared. Proceeding with existing contents.")
+            break
+        else:
+            print("Invalid input. Please enter 'y' or 'n'.")
 else:
     os.makedirs(BAG_EXPORT_DIR)
     print(f"Created new directory: {BAG_EXPORT_DIR}")

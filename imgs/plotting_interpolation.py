@@ -4,11 +4,12 @@ import numpy as np
 import re
 import matplotlib.pyplot as plt
 import sys
-sys.path.append('/workspaces/MELO_workspace/src/noise_propagation_model/interpolator/RBF')
-sys.path.append('/workspaces/MELO_workspace/src/environment/environment')
+sys.path.append('/workspaces/MUTE_v1/src/noise_propagation_model/interpolator/RBF')
+sys.path.append('/workspaces/MUTE_v1/src/environment/environment')
 
-from utils2 import RBFInterpolatorCustom
-from py_polyshp import Polyshp  # Importing Polyshp from py_polyshd.py
+
+from noise_propagation_model.models.RBF.utils2 import RBFInterpolatorCustom
+from environment.py_polyshp import Polyshp
 plt.rcParams.update({'font.size': 14})  # Adjust font size as needed
 
 def overlay_polygons(ax, polygon_list):
@@ -110,13 +111,13 @@ def plot_interpolation_results(coord_path, tl_path, filename, interpolator, shp_
 
     # Adjust layout and save the figure as a high-resolution PNG
     plt.tight_layout()
-    plt.savefig('/workspaces/MELO_workspace/imgs/interpolation_comparisons.png', format='png', dpi=300)
+    plt.savefig('/workspaces/MUTE_v1/imgs/interpolation_comparisons.png', format='png', dpi=300)
     plt.close()
 
-coord_path = '/workspaces/MELO_workspace/src/noise_propagation_model/models/bellhop_new/Coordinate_data'
-tl_path = '/workspaces/MELO_workspace/src/noise_propagation_model/models/bellhop_new/TL_data'
-shp_data_path = '/workspaces/MELO_workspace/src/environment/shoreline_data'  # Path to your shoreline shapefile directory
-model_path = '/workspaces/MELO_workspace/src/noise_propagation_model/interpolator/RBF/model_single_freq'
+coord_path = '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/bellhop/Coordinate_data'
+tl_path = '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/bellhop/TL_data'
+shp_data_path = '/workspaces/MUTE_v1/src/environment/shoreline_data'  # Path to your shoreline shapefile directory
+model_path = '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/RBF/model_single_freq'
 
 # Define 'filtered' folder paths
 filtered_coord_path = os.path.join(coord_path, 'filtered','one_z_plain')
@@ -125,7 +126,7 @@ filtered_tl_path = os.path.join(tl_path, 'filtered','one_z_plain')
 rbf_interpolator = RBFInterpolatorCustom.import_model(model_path)
 filename = '334_origin_lat48.821783203_lon-122.931561706.h5'
 
-shp_data_path = '/workspaces/MELO_workspace/src/environment/shoreline_data'
+shp_data_path = '/workspaces/MUTE_v1/src/environment/shoreline_data'
 shp_class = Polyshp(shp_data_path)
 # Plot results using the interpolator
 plot_interpolation_results(filtered_coord_path, filtered_tl_path, filename, rbf_interpolator, shp_class)

@@ -3,10 +3,12 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 import sys
-sys.path.append('/workspaces/MELO_workspace/src/environment/environment')
 import matplotlib as mpl
 import matplotlib.colors as colors
-from py_polyshp import Polyshp  # Importing Polyshp from py_polyshd.py
+import sys
+sys.path.append('/workspaces/MUTE_v1/src/environment/environment')
+
+from environment.py_polyshp import Polyshp
 
 
 def read_h5(file_path):
@@ -168,13 +170,13 @@ def search_and_analyze_h5_multiple_freq(filename, coord_path, tl_path, freq_valu
 
 # Example usage
 filename = '354_origin_lat49.080969519_lon-123.344334980'
-coord_path = '/workspaces/MELO_workspace/src/noise_propagation_model/models/bellhop_new/Coordinate_data'
-tl_path = '/workspaces/MELO_workspace/src/noise_propagation_model/models/bellhop_new/TL_data'
-image_export = '/workspaces/MELO_workspace/imgs'
+coord_path = '/workspaces/MUTE_V1/src/noise_propagation_model/models/bellhop_new/Coordinate_data'
+tl_path = '/workspaces/MUTE_v1/src/noise_propagation_model/models/bellhop_new/TL_data'
+image_export = '/workspaces/MUTE_v1/imgs'
 freq_values = [12.5, 100.0, 1000.0]  # Frequencies to plot
 z_value = 50.0  # Fixed depth for all subplots
 
-shp_data_path = '/workspaces/MELO_workspace/src/environment/shoreline_data'  # Path to your shoreline shapefile directory
+shp_data_path = '/workspaces/MUTE_v1/src/environment/shoreline_data'  # Path to your shoreline shapefile directory
 shp_class = Polyshp(shp_data_path)
 
 search_and_analyze_h5_multiple_freq(filename, coord_path, tl_path, freq_values, z_value, shp_class, image_export)

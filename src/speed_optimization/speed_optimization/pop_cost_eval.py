@@ -40,17 +40,13 @@ def load_mammal_states(src_dir: Path2, mammal_case: str) -> np.ndarray:
     
     Args:
         src_dir: Source directory path
-        mammal_case: Case study name for mammals (e.g., 'Case_A', 'Case_D')
+        mammal_case: Case study name for mammals (e.g., 'Case_A', 'Case_B')
     
     Returns:
         numpy array of State objects
     """
     # Define the path to mammal case studies
     mammal_path = src_dir / 'mammals' / 'case_studies' / mammal_case
-    
-    if not mammal_path.exists():
-        print(f"Warning: Mammal case directory does not exist: {mammal_path}")
-        return np.empty((0,), dtype=State)
     
     # Find all YAML files in the directory
     yaml_files = list(mammal_path.glob('*.yaml')) + list(mammal_path.glob('*.yml'))
@@ -121,9 +117,9 @@ class PopulationCostEvaluator:
         # Configuration parameters
         self.case_study = case_study
         self.TL_model_path = str(self.src_dir / 'noise_propagation_model' / 'noise_propagation_model' / 'models' / 'RBF' / 'model_single_freq')
-        self.acc_max = 36.60  # knots/h
-        self.acc_min = -33.00  # knots/h
-        self.timestep = (3/60)  # hrs
+        self.acc_max = 10000.60  # knots/h
+        self.acc_min = -10000.0  # knots/h
+        self.timestep = (9/60)  # hrs
         self.obj_computation_step = 1
         
         # Ship and voyage parameters
@@ -486,7 +482,7 @@ def main():
     """Main function to run the enhanced population cost evaluator."""
     # Define parameters
     case_study = 'Case_1'
-    mammal_case = 'Case_D'
+    mammal_case = 'Case_B'
     
     # Define folder path containing population CSV files
     population_folder_path = "/workspaces/MUTE_v1/imgs/Convergence plot"

@@ -71,7 +71,7 @@ class SpeedOptimizer(Node):
         self.case_study = 'Case_3'
         self.skip_process = None
         self.TL_model_path = str(src_dir / 'noise_propagation_model' / 'noise_propagation_model' / 'models' / 'RBF' / 'model_single_freq')
-        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_3' / 'optimal_population_1800.csv')
+        self.previous_solution_path = str(src_dir / 'ship' / 'case_studies' / 'Case_3' / 'optimal_population_2200.csv')
         self.acc_max = 10000.00 # knots/h
         self.acc_min = -10000.60 # knots/h
 
@@ -101,7 +101,7 @@ class SpeedOptimizer(Node):
         self.solve_optimization_thread = None
         self.previous_solution_num_gen = 0
         self.previous_population = None
-        self.num_gen = 3000 # TODO Change this to 3000
+        self.num_gen = 2210 # TODO Change this to 3000
         self.pop_size = 1000
         self.pre_optimize = False # NOTE I tried to do the pre opt and perform biased pop initialization but the solutions didn't turn out good so always keep it False
         self.pre_optimize_gens = 1000
@@ -466,11 +466,11 @@ class SpeedOptimizer(Node):
             plt.savefig(plot_filename)
             plt.close()
             
-            # Create route/speed plot
-            if is_pre_opt:
-                self.plot_speeds(problem, res.X, timestep, filename="pre_optimized_speed_and_positions.png")
-            else:
-                self.plot_speeds(problem, res.X, timestep)   # existing filename logic
+            # # Create route/speed plot
+            # if is_pre_opt:
+            #     self.plot_speeds(problem, res.X, timestep, filename="pre_optimized_speed_and_positions.png")
+            # else:
+            #     self.plot_speeds(problem, res.X, timestep)   # existing filename logic
                 
         else:
             error_msg = f"{RED}Pre-optimization NOT SOLVED{RESET}" if is_pre_opt else f"{RED}NOT SOLVED{RESET}"

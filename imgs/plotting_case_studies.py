@@ -30,13 +30,21 @@ locations = {
 # Create a GeoDataFrame for these fixed locations
 locations_df = gpd.GeoDataFrame(geometry=[Point(lon, lat) for lat, lon in locations.values()], index=locations.keys())
 
-# Set the figure size and create subplots
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 15))
+# Set the figure size and create subplots with equal spacing
+fig = plt.figure(figsize=(20, 8))
+
+# Create subplots with manual positioning for equal space - adjusted for compact fit
+ax1 = plt.subplot2grid((1, 2), (0, 0))
+ax2 = plt.subplot2grid((1, 2), (0, 1))
+
+# Adjust subplot parameters for better space utilization and compact fit
+plt.subplots_adjust(left=0.12, bottom=0.08, right=0.95, top=0.95, hspace=0.25)
 
 # Load shoreline/islands data with black border
 shoreline = gpd.read_file('/workspaces/MUTE_v1/src/environment/shoreline_data')
 
 shoreline.plot(ax=ax1, color='lightgrey', edgecolor='black')  # Add black border
+ax1.set_aspect('auto')  # Override geopandas default equal aspect ratio
 
 # Plot paths for each case with matching color start and end markers
 for i, df in enumerate(data):
@@ -54,13 +62,18 @@ ship_plane = gpd.read_file(ship_plane_path)
 ship_plane_remainder = ship_plane.drop(ship_plane.index[0])
 ship_plane_remainder.plot(ax=ax1, color='blue', alpha=0.3, edgecolor='black')
 
+# Ensure aspect ratio allows full use of subplot space
+ax1.set_aspect('auto')
+
 # Configure map limits and labels
 ax1.set_xlim(-125.72143254685919, -121.78283374169551)
 ax1.set_ylim(47.95629176783697, 49.5104276496541)
-ax1.set_title('Voyage Paths with Key Locations', fontfamily="Times New Roman")
 ax1.set_xlabel('Longitude', fontfamily="Times New Roman", fontsize=18)
 ax1.set_ylabel('Latitude', fontfamily="Times New Roman", fontsize=18)
-ax1.tick_params(axis='both', which='major', labelsize=18)
+ax1.tick_params(axis='both', which='major', labelsize=16)
+
+# Reduce the number of x-axis ticks to avoid cramping
+ax1.locator_params(axis='x', nbins=4)
 
 # Custom legend with black markers for Departure and Destination
 custom_legend = [
@@ -70,7 +83,7 @@ custom_legend = [
     plt.Line2D([0], [0], color='black', marker='o', linestyle='None', markersize=8, label='Departure'),
     plt.Line2D([0], [0], color='black', marker='s', linestyle='None', markersize=8, label='Destination')
 ]
-ax1.legend(handles=custom_legend, loc='upper right', prop={"family": "Times New Roman"})
+ax1.legend(handles=custom_legend, loc='upper right', prop={"family": "Times New Roman", "size": 12})
 
 # Plot velocity profile in the second subplot with specified colors and start/end markers
 for i, df in enumerate(data):
@@ -81,21 +94,17 @@ for i, df in enumerate(data):
 
 # Configure velocity plot, starting voyage time from 0
 ax2.set_xlim(left=0)
-ax2.set_ylim(8, 18)  # Set y-axis limits from 8 to 16
-ax2.set_title('Velocity Profile over Voyage Time', fontfamily="Times New Roman")
+ax2.set_ylim(8, 18)  # Set y-axis limits from 8 to 18
 ax2.set_xlabel('Voyage Time (minutes)', fontfamily="Times New Roman", fontsize=18)
 ax2.set_ylabel('Ship speed (knots)', fontfamily="Times New Roman", fontsize=18)
-ax2.tick_params(axis='both', which='major', labelsize=18)
-ax2.legend(case_names, loc='upper right', prop={"family": "Times New Roman"})
-
+ax2.tick_params(axis='both', which='major', labelsize=16)
+ax2.legend(case_names, loc='upper right', prop={"family": "Times New Roman", "size": 12})
 
 # Set all fonts to Times New Roman
 plt.rcParams['font.family'] = 'Times New Roman'
-plt.rcParams.update({'font.size': 18})
-plt.tight_layout()
+plt.rcParams.update({'font.size': 16})
 
 # Save the figure as a PNG file with specified size
 output_path = '/workspaces/MUTE_v1/imgs/voyage_plots.png'
-# fig.set_size_inches(10, 25)  # Fixed size before saving
-plt.savefig(output_path, dpi=300)
+plt.savefig(output_path, dpi=300, bbox_inches='tight')
 plt.close()

@@ -3,7 +3,6 @@ from speed_optimization.py_util import calculate_path_length
 import numpy as np
 from pyproj import Geod
 from shapely.geometry import Point, Polygon, MultiPolygon
-from scipy.integrate import simps
 from audiogram_func.audiog import audiogram_function
 from models.jomopans_echo.model import jomopans_model_matrix
 import matplotlib.pyplot as plt

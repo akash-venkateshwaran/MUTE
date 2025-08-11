@@ -4,11 +4,11 @@ from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
 
 import sys
-sys.path.append('/workspaces/MELO_workspace/src/noise_propagation_model/interpolator/RBF')
-sys.path.append('/workspaces/MELO_workspace/src/environment/environment')
+sys.path.append('/workspaces/MUTE_v1/src/noise_propagation_model/interpolator/RBF')
+sys.path.append('/workspaces/MUTE_v1/src/environment/environment')
 
-from utils_rbf import RBFInterpolatorCustom
-from py_polyshp import Polyshp
+from noise_propagation_model.models.RBF.utils_rbf import RBFInterpolatorCustom
+from environment.py_polyshp import Polyshp
 
 # Define an array of source locations (latitude, longitude)
 source_locations = [
@@ -182,12 +182,13 @@ def plot_transmission_loss(lat_mesh_flat, lon_mesh_flat, src_lat, src_lon, recei
     plt.legend()
     plt.show()
 
+
 # Load the RBF interpolator model
-model_path = '/workspaces/MELO_workspace/src/noise_propagation_model/interpolator/RBF/model'
+model_path = '/workspaces/MUTE_v1/src/noise_propagation_model/noise_propagation_model/models/RBF/model'
 rbf_interpolator = RBFInterpolatorCustom.import_model(model_path)
 
 # Load shoreline data and get polygon list
-shp_data_path = '/workspaces/MELO_workspace/src/environment/shoreline_data'
+shp_data_path = '/workspaces/MUTE_v1/src/environment/shoreline_data'
 shp_class = Polyshp(shp_data_path)
 polygon_list = shp_class.get_polygons(lat_min, lat_max, lon_min, lon_max)
 

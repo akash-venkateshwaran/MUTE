@@ -3,3 +3,5 @@ install/*
 log/*
 site/*
 src/ship/case_studies/*
+src/noise_propagation_model/noise_propagation_model/models/bellhop/TL_data/*
+src/noise_propagation_model/noise_propagation_model/models/bellhop/Coordinate_data/*
